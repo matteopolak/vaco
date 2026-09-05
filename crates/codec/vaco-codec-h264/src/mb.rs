@@ -83,9 +83,11 @@
 //!   `ctxIdxInc` defects behind it ([`MvInfo::direct_or_skip`] and
 //!   [`decode_mb_type_intra_suffix_tail`]); `decode_slice_cabac`'s own
 //!   comment records the measurement that lifted the gate.
-//!   **Temporal direct** (`direct_spatial_mv_pred_flag == 0`) is still
-//!   refused — a materially different derivation this crate does not
-//!   implement, and not x264's default.
+//!   **Temporal direct** (`direct_spatial_mv_pred_flag == 0`) is supported
+//!   on the CABAC path for frame-coded short-term pictures whose current
+//!   reference lists are not reordered. CAVLC temporal direct, fields,
+//!   MBAFF, long-term references, and reordered current lists remain
+//!   explicit refusals.
 //!
 //! **In scope but not yet bit-exact**: CABAC's I/P-slice macroblock layer
 //! (`mb_type`, `sub_mb_type`, `mb_skip_flag`, `coded_block_pattern`,
@@ -3922,7 +3924,17 @@ pub fn decode_slice_cabac(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
-    decode_slice_cabac_into(cabac, budget, sps, pps, header, colocated, Vec::new(), 0)
+    decode_slice_cabac_into(
+        cabac,
+        budget,
+        sps,
+        pps,
+        header,
+        colocated,
+        None,
+        Vec::new(),
+        0,
+    )
 }
 
 /// [`decode_slice_cabac`], but appending into an already-allocated
@@ -3940,6 +3952,7 @@ pub(crate) fn decode_slice_cabac_into(
     pps: &Pps,
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
+    temporal: Option<&TemporalDirect<'_>>,
     macroblocks: Vec<MbSummary>,
     slice_id: u16,
 ) -> Result<SliceStats> {
@@ -3977,7 +3990,7 @@ pub(crate) fn decode_slice_cabac_into(
     // that point) -- kept, not deleted, for the day that gate lifts: this
     // is a real, independent scope limitation that will matter again the
     // moment B slices are trusted for their common (spatial-direct) case.
-    if is_b_slice && header.direct_spatial_mv_pred != Some(true) {
+    if is_b_slice && header.direct_spatial_mv_pred != Some(true) && temporal.is_none() {
         return Err(Error::Unsupported(
             "vaco-codec-h264: temporal direct prediction (direct_spatial_mv_pred_flag == 0) is out of scope",
         ));
@@ -4055,15 +4068,25 @@ pub(crate) fn decode_slice_cabac_into(
                 // `B_Direct_16x16`" -- literally the same spatial-direct
                 // derivation, at 16x16 granularity, reusing the A/B/C
                 // neighbours already looked up above.
-                let params = spatial_direct_params(left, above, c_neighbour);
-                apply_spatial_direct_16x16(
-                    &mut grids,
-                    mb_x,
-                    mb_y,
-                    sps.direct_8x8_inference,
-                    params,
-                    colocated,
-                );
+                if let Some(temporal) = temporal {
+                    apply_temporal_direct_16x16(
+                        &mut grids,
+                        mb_x,
+                        mb_y,
+                        sps.direct_8x8_inference,
+                        temporal,
+                    )?;
+                } else {
+                    let params = spatial_direct_params(left, above, c_neighbour);
+                    apply_spatial_direct_16x16(
+                        &mut grids,
+                        mb_x,
+                        mb_y,
+                        sps.direct_8x8_inference,
+                        params,
+                        colocated,
+                    );
+                }
             } else {
                 let skip_mv = crate::motion::p_skip_mv(
                     left.as_motion_neighbour(0),
@@ -4177,6 +4200,7 @@ pub(crate) fn decode_slice_cabac_into(
                 mb_x,
                 mb_y,
                 colocated,
+                temporal,
             )?;
             stats.macroblock_count += 1;
             let info = grids.mb_info_at(mb_x, mb_y);
@@ -4287,6 +4311,7 @@ fn decode_macroblock_cabac(
     mb_x: u32,
     mb_y: u32,
     colocated: Option<&ColocatedField>,
+    temporal: Option<&TemporalDirect<'_>>,
 ) -> Result<MbResidual> {
     let is_i_slice = matches!(header.kind, SliceKind::I);
     let is_b_slice = matches!(header.kind, SliceKind::B);
@@ -4509,19 +4534,29 @@ fn decode_macroblock_cabac(
         // that can apply to an inter macroblock, not just `I_NxN`).
         no_sub_mb_part_size_less_than_8x8 = match &kind {
             MbKind::BDirect16x16 => {
-                let Some(params) = direct_params else {
-                    return Err(Error::InvalidData(
-                        "vaco-codec-h264: B_Direct_16x16 outside a B slice",
-                    ));
-                };
-                apply_spatial_direct_16x16(
-                    grids,
-                    mb_x,
-                    mb_y,
-                    sps.direct_8x8_inference,
-                    params,
-                    colocated,
-                );
+                if let Some(temporal) = temporal {
+                    apply_temporal_direct_16x16(
+                        grids,
+                        mb_x,
+                        mb_y,
+                        sps.direct_8x8_inference,
+                        temporal,
+                    )?;
+                } else {
+                    let Some(params) = direct_params else {
+                        return Err(Error::InvalidData(
+                            "vaco-codec-h264: B_Direct_16x16 outside a B slice",
+                        ));
+                    };
+                    apply_spatial_direct_16x16(
+                        grids,
+                        mb_x,
+                        mb_y,
+                        sps.direct_8x8_inference,
+                        params,
+                        colocated,
+                    );
+                }
                 true
             }
             MbKind::Inter { parts } => match parts.as_slice() {
@@ -4563,6 +4598,7 @@ fn decode_macroblock_cabac(
                 false,
                 None,
                 None,
+                None,
             )?,
             MbKind::B8x8 => {
                 let Some(params) = direct_params else {
@@ -4582,6 +4618,7 @@ fn decode_macroblock_cabac(
                     sps.direct_8x8_inference,
                     Some(params),
                     colocated,
+                    temporal,
                 )?
             }
             _ => {
@@ -4904,6 +4941,60 @@ pub struct ColocatedField {
     /// 32,000 entries at 4K), it is immutable once decoded, and every B slice
     /// naming this reference wants the same one.
     blocks: std::sync::Arc<Vec<MvInfo>>,
+    ref_pocs: std::sync::Arc<Vec<[Option<i32>; 2]>>,
+}
+
+/// Frame-coded temporal-direct inputs that remain after the slice decoder has
+/// resolved both active reference lists. The current decoder deliberately
+/// supplies this only for the short-term, unreordered subset it can identify.
+pub(crate) struct TemporalDirect<'a> {
+    colocated: &'a ColocatedField,
+    curr_poc: i32,
+    list0_pocs: &'a [i32],
+    list1_poc: i32,
+}
+
+impl<'a> TemporalDirect<'a> {
+    pub(crate) const fn new(
+        colocated: &'a ColocatedField,
+        curr_poc: i32,
+        list0_pocs: &'a [i32],
+        list1_poc: i32,
+    ) -> Self {
+        Self {
+            colocated,
+            curr_poc,
+            list0_pocs,
+            list1_poc,
+        }
+    }
+
+    fn colocated_mv(&self, x: u32, y: u32) -> Result<(i8, (i16, i16), i32)> {
+        let info = self.colocated.at(x, y);
+        if !info.mb_available || info.pred.is_none() {
+            let poc = self.list0_pocs.first().copied().ok_or(Error::Unsupported(
+                "vaco-codec-h264: temporal direct without RefPicList0[0] is out of scope",
+            ))?;
+            return Ok((0, (0, 0), poc));
+        }
+        let (mv, poc) = if info.reads_l0() {
+            (info.mv_l0(), self.colocated.reference_pocs(x, y)[0])
+        } else {
+            (info.mv_l1(), self.colocated.reference_pocs(x, y)[1])
+        };
+        let poc = poc.ok_or(Error::Unsupported(
+            "vaco-codec-h264: temporal direct without a colocated reference identity is out of scope",
+        ))?;
+        let mapped = self
+            .list0_pocs
+            .iter()
+            .position(|&candidate| candidate == poc)
+            .and_then(|index| i8::try_from(index).ok())
+            .ok_or(Error::Unsupported(
+                "vaco-codec-h264: temporal direct reference is absent from RefPicList0",
+            ))?;
+        Ok((mapped, mv, poc))
+    }
 }
 
 impl ColocatedField {
@@ -4911,11 +5002,13 @@ impl ColocatedField {
         width_4x4: u32,
         height_4x4: u32,
         blocks: std::sync::Arc<Vec<MvInfo>>,
+        ref_pocs: std::sync::Arc<Vec<[Option<i32>; 2]>>,
     ) -> Self {
         Self {
             width_4x4,
             height_4x4,
             blocks,
+            ref_pocs,
         }
     }
 
@@ -4931,6 +5024,20 @@ impl ColocatedField {
         };
         let idx: usize = idx;
         self.blocks.get(idx).copied().unwrap_or_default()
+    }
+
+    fn reference_pocs(&self, x: u32, y: u32) -> [Option<i32>; 2] {
+        if x >= self.width_4x4 || y >= self.height_4x4 {
+            return [None; 2];
+        }
+        let Some(idx) = (y.saturating_mul(self.width_4x4).saturating_add(x))
+            .try_into()
+            .ok()
+        else {
+            return [None; 2];
+        };
+        let idx: usize = idx;
+        self.ref_pocs.get(idx).copied().unwrap_or([None; 2])
     }
 
     /// JM 19.1's own `get_colocated_info_4x4`/`_8x8` "moving" test (clause
@@ -5232,6 +5339,106 @@ fn apply_spatial_direct_16x16(
             colocated,
         );
     }
+}
+
+/// Clause 8.4.1.2.3, frame-coded short-term temporal direct prediction.
+///
+/// The caller only constructs [`TemporalDirect`] when `RefPicList0[0]` and
+/// `RefPicList1[0]` are known and the current list has no reordering. A
+/// persisted co-located 4x4 block carries its resolved reference-picture
+/// identity, so `MapColToList0` is a POC lookup rather than an unsafe reuse
+/// of an index from a different slice's list.
+fn apply_temporal_direct_quadrant(
+    grids: &mut CabacGrids,
+    mb_x: u32,
+    mb_y: u32,
+    k: u32,
+    direct_8x8_inference: bool,
+    temporal: &TemporalDirect<'_>,
+) -> Result<()> {
+    let (qi, qj) = (2 * (k & 1), 2 * (k >> 1));
+    let write_block = |grids: &mut CabacGrids,
+                       bx: u32,
+                       by: u32,
+                       ref_idx: i8,
+                       mv_col: (i16, i16),
+                       pic0_poc: i32| {
+        let td = (temporal.list1_poc - pic0_poc).clamp(-128, 127);
+        let tb = (temporal.curr_poc - pic0_poc).clamp(-128, 127);
+        let (mv0_x, mv0_y) = if td == 0 {
+            (i32::from(mv_col.0), i32::from(mv_col.1))
+        } else {
+            #[allow(
+                clippy::integer_division,
+                reason = "H.264 equations 8-197 through 8-200 specify integer division"
+            )]
+            let tx = (16_384 + i32::try_from((td / 2).unsigned_abs()).unwrap_or(64)) / td;
+            let scale = ((tb * tx + 32) >> 6).clamp(-1024, 1023);
+            (
+                (scale * i32::from(mv_col.0) + 128) >> 8,
+                (scale * i32::from(mv_col.1) + 128) >> 8,
+            )
+        };
+        let mv0 = (
+            i16::try_from(mv0_x).unwrap_or(if mv0_x.is_negative() {
+                i16::MIN
+            } else {
+                i16::MAX
+            }),
+            i16::try_from(mv0_y).unwrap_or(if mv0_y.is_negative() {
+                i16::MIN
+            } else {
+                i16::MAX
+            }),
+        );
+        let mv1 = (
+            mv0.0.saturating_sub(mv_col.0),
+            mv0.1.saturating_sub(mv_col.1),
+        );
+        grids.set_mv(
+            mb_x * 4 + bx,
+            mb_y * 4 + by,
+            MvInfo {
+                mb_available: true,
+                pred: Some(PartPred::Bi),
+                ref_idx: [ref_idx, 0],
+                mvd: [(0, 0); 2],
+                mv: [mv0, mv1],
+                direct_or_skip: true,
+            },
+        );
+    };
+    if direct_8x8_inference {
+        let (ref_idx, mv_col, pic0_poc) = temporal.colocated_mv(mb_x * 4 + qi, mb_y * 4 + qj)?;
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                write_block(grids, qi + dx, qj + dy, ref_idx, mv_col, pic0_poc);
+            }
+        }
+    } else {
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                let (bx, by) = (qi + dx, qj + dy);
+                let (ref_idx, mv_col, pic0_poc) =
+                    temporal.colocated_mv(mb_x * 4 + bx, mb_y * 4 + by)?;
+                write_block(grids, bx, by, ref_idx, mv_col, pic0_poc);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_temporal_direct_16x16(
+    grids: &mut CabacGrids,
+    mb_x: u32,
+    mb_y: u32,
+    direct_8x8_inference: bool,
+    temporal: &TemporalDirect<'_>,
+) -> Result<()> {
+    for k in 0..4u32 {
+        apply_temporal_direct_quadrant(grids, mb_x, mb_y, k, direct_8x8_inference, temporal)?;
+    }
+    Ok(())
 }
 
 fn decode_one_partition_cabac(
@@ -5536,6 +5743,7 @@ fn decode_sub_mb_pred_cabac(
     direct_8x8_inference: bool,
     direct_params: Option<DirectParams>,
     colocated: Option<&ColocatedField>,
+    temporal: Option<&TemporalDirect<'_>>,
 ) -> Result<bool> {
     let mut subs: Vec<(u8, u8, Option<PartPred>)> = budget_alloc_four();
     for _ in 0..4 {
@@ -5564,24 +5772,35 @@ fn decode_sub_mb_pred_cabac(
         if pred.is_some() {
             continue;
         }
-        let Some(params) = direct_params else {
-            return Err(Error::InvalidData(
-                "vaco-codec-h264: B_Direct_8x8 outside a B slice",
-            ));
-        };
         #[allow(
             clippy::cast_possible_truncation,
             reason = "i is a 0..4 enumerate index"
         )]
-        apply_direct_quadrant(
-            grids,
-            mb_x,
-            mb_y,
-            i as u32,
-            direct_8x8_inference,
-            params,
-            colocated,
-        );
+        if let Some(temporal) = temporal {
+            apply_temporal_direct_quadrant(
+                grids,
+                mb_x,
+                mb_y,
+                i as u32,
+                direct_8x8_inference,
+                temporal,
+            )?;
+        } else {
+            let Some(params) = direct_params else {
+                return Err(Error::InvalidData(
+                    "vaco-codec-h264: B_Direct_8x8 outside a B slice",
+                ));
+            };
+            apply_direct_quadrant(
+                grids,
+                mb_x,
+                mb_y,
+                i as u32,
+                direct_8x8_inference,
+                params,
+                colocated,
+            );
+        }
     }
 
     let n0 = header.num_ref_idx_l0_active_minus1;

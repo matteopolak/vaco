@@ -12,13 +12,15 @@
 //! [`crate::reconstruct::reconstruct_picture`] — see both modules' own docs
 //! for what is refused one level down (`I_PCM`, MBAFF, the 8x8 transform,
 //! `constrained_intra_pred_flag`'s substitution rule, temporal direct
-//! prediction, long-term references; CAVLC
+//! prediction outside the CABAC frame-coded short-term subset, long-term references; CAVLC
 //! additionally refuses `I_PCM` and the 8x8 transform since its tables
 //! were never checked against either).
 //!
 //! CABAC covers B slices: reference picture list 1 construction (clause 8.2.4.2.3), spatial
-//! direct prediction's colocated-picture lookup (clause 8.4.1.2.1/2, [`ColocatedField`]), and
-//! bi-prediction weighting (clause 8.4.2.3: default average, explicit, implicit).
+//! and temporal direct prediction's colocated-picture lookup (clauses 8.4.1.2.1-3,
+//! [`ColocatedField`]), and bi-prediction weighting (clause 8.4.2.3: default average,
+//! explicit, implicit). Temporal direct is deliberately limited to frame-coded short-term
+//! pictures without current-list reordering.
 //!
 //! CAVLC reconstructs real pixels, not merely bit consumption, via the
 //! same [`crate::mb::SliceStats`]/`MbSummary` shape CABAC produces (built
@@ -59,7 +61,7 @@ use vaco_pixfmt::PixFmt;
 use vaco_pool::ALIGN;
 
 use crate::frame_task::{DeblockParams, FrameGeometry, H264FrameTask, SliceContext};
-use crate::mb::{ColocatedField, MvInfo};
+use crate::mb::{ColocatedField, MvInfo, TemporalDirect};
 use crate::reconstruct::{BiPredMode, ImplicitWeight, ImplicitWeights, SliceWeightTables};
 use crate::task_pool::TaskBufferPools;
 
@@ -106,6 +108,10 @@ struct RefPicture {
     /// when a *later* B slice's `RefPicList1[0]` turns out to be this
     /// exact picture.
     motion: Arc<Vec<MvInfo>>,
+    /// Resolved reference POCs parallel to `motion`, retained so a later
+    /// temporal-direct B slice can map a colocated `refIdxCol` into its own
+    /// list without assuming two slices used identical index order.
+    motion_ref_pocs: Arc<Vec<[Option<i32>; 2]>>,
 }
 
 /// The three coded sample planes of one 4:2:0 picture, in bytes.
@@ -813,13 +819,41 @@ impl H264Decoder {
             // into `decode_slice_cabac` before the borrow of `self.dpb` this
             // function needs later (pushing this picture's own copy) begins.
             let colocated: Option<ColocatedField> = if is_b_slice {
-                list1_idx
-                    .first()
-                    .and_then(|&i| self.dpb.get(i))
-                    .map(|p| ColocatedField::new(luma4_width, mbs_high * 4, Arc::clone(&p.motion)))
+                list1_idx.first().and_then(|&i| self.dpb.get(i)).map(|p| {
+                    ColocatedField::new(
+                        luma4_width,
+                        mbs_high * 4,
+                        Arc::clone(&p.motion),
+                        Arc::clone(&p.motion_ref_pocs),
+                    )
+                })
             } else {
                 None
             };
+            let ref_list0_poc: Vec<i32> = list0_idx
+                .iter()
+                .filter_map(|&i| self.dpb.get(i))
+                .map(|r| r.poc)
+                .collect();
+            let ref_list1_poc: Vec<i32> = list1_idx
+                .iter()
+                .filter_map(|&i| self.dpb.get(i))
+                .map(|r| r.poc)
+                .collect();
+            let temporal = (is_b_slice
+                && header.direct_spatial_mv_pred == Some(false)
+                && header.ref_pic_list_modification_l0.is_empty()
+                && header.ref_pic_list_modification_l1.is_empty())
+            .then(|| {
+                let colocated = colocated.as_ref()?;
+                Some(TemporalDirect::new(
+                    colocated,
+                    curr_poc,
+                    ref_list0_poc.as_slice(),
+                    *ref_list1_poc.first()?,
+                ))
+            })
+            .flatten();
 
             // The two entropy modes share every downstream stage from here on
             // -- `crate::mb::SliceStats`/`MbSummary` is the entropy-independent
@@ -836,6 +870,7 @@ impl H264Decoder {
                     pps,
                     &header,
                     colocated.as_ref(),
+                    temporal.as_ref(),
                     macroblocks,
                     slice_id,
                 )?;
@@ -877,16 +912,6 @@ impl H264Decoder {
             // lookup (its own doc): the same DPB positions as `ref_list0`/
             // `ref_list1` above, as POCs rather than sample planes -- deblocking
             // never touches pixels, only needs to tell two references apart.
-            let ref_list0_poc: Vec<i32> = list0_idx
-                .iter()
-                .filter_map(|&i| self.dpb.get(i))
-                .map(|r| r.poc)
-                .collect();
-            let ref_list1_poc: Vec<i32> = list1_idx
-                .iter()
-                .filter_map(|&i| self.dpb.get(i))
-                .map(|r| r.poc)
-                .collect();
 
             // Clause 8.4.2.3's `pred_weight_table()`, already parsed by
             // `vaco-parse-h264` (it has to be, the bits are in the slice
@@ -1086,6 +1111,7 @@ impl H264Decoder {
             // no z-scan conversion needed.
             let n_luma4 = usize::try_from(luma4_width.saturating_mul(mbs_high * 4)).unwrap_or(0);
             let mut motion: Vec<MvInfo> = self.budget.alloc(n_luma4)?;
+            let mut motion_ref_pocs: Vec<[Option<i32>; 2]> = self.budget.alloc(n_luma4)?;
             for mb in &macroblocks {
                 for (i, &block) in mb.mv_blocks.iter().enumerate() {
                     // `i % 4` / `i / 4`, spelled as bit ops so this isn't an
@@ -1101,10 +1127,32 @@ impl H264Decoder {
                         && let Some(slot) = motion.get_mut(idx)
                     {
                         *slot = block;
+                        if let Some(ref_slot) = motion_ref_pocs.get_mut(idx) {
+                            let l0 = usize::try_from(block.ref_idx_l0()).ok();
+                            let l1 = usize::try_from(block.ref_idx_l1()).ok();
+                            let refs = slice_ctxs.get(usize::from(mb.slice_id)).map_or(
+                                [None; 2],
+                                |slice| {
+                                    [
+                                        l0.and_then(|index| {
+                                            slice.ref_list0_poc.get(index).copied()
+                                        }),
+                                        l1.and_then(|index| {
+                                            slice.ref_list1_poc.get(index).copied()
+                                        }),
+                                    ]
+                                },
+                            );
+                            *ref_slot = refs;
+                        }
                     }
                 }
             }
-            let motion_bytes = (motion.len().saturating_mul(core::mem::size_of::<MvInfo>())) as u64;
+            let motion_bytes = (motion.len().saturating_mul(core::mem::size_of::<MvInfo>())
+                + motion_ref_pocs
+                    .len()
+                    .saturating_mul(core::mem::size_of::<[Option<i32>; 2]>()))
+                as u64;
             // The DPB entry's own samples, charged here and released when this
             // entry is evicted. `allocate` hands back the sole writer (which
             // goes to the task) and a shareable reader (which goes in the DPB
@@ -1127,6 +1175,7 @@ impl H264Decoder {
                 poc: curr_poc,
                 frame_num: curr_frame_num,
                 motion: Arc::new(motion),
+                motion_ref_pocs: Arc::new(motion_ref_pocs),
             });
         }
 
