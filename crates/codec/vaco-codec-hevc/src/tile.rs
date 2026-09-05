@@ -39,6 +39,7 @@ pub struct TileCabacState<'a> {
     first_ctb_leaf_nxn: Option<bool>,
     first_ctb_leaf_prev_intra: Option<bool>,
     first_ctb_leaf_mpm_prefix: Option<bool>,
+    first_ctb_leaf_mpm_suffix: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -327,7 +328,39 @@ impl TileCabacState<'_> {
                 "vaco-codec-hevc: first tile leaf dimensions are invalid",
             ));
         }
-        Ok(self.cabac.decode_bypass() != 0)
+        let suffix = self.cabac.decode_bypass() != 0;
+        self.first_ctb_leaf_mpm_suffix = Some(suffix);
+        Ok(suffix)
+    }
+
+    /// Resolve the first PU's measured MPM index to its luma mode.
+    ///
+    /// At the top-left PU of the first CTB in a tile, both neighbours are
+    /// unavailable, so §8.4.2 derives `[PLANAR, DC, VER]`. This bounded step
+    /// supports only the fixture's measured index 1 (`DC`); another index is
+    /// refused before any later intra syntax is consumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] when the measured MPM index
+    /// is not 1, and [`vaco_core::Error::InvalidData`] for inconsistent leaf
+    /// dimensions.
+    pub fn resolve_first_ctb_leaf_luma_mode(
+        &self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<u8> {
+        if self.first_ctb_leaf_mpm_suffix != Some(false) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile leaf MPM index is not the measured mode",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        Ok(crate::intra_mode::mpm_list(crate::intra_mode::DC_IDX, crate::intra_mode::DC_IDX)[1])
     }
 }
 
@@ -598,6 +631,7 @@ impl TileLayout {
                 first_ctb_leaf_nxn: None,
                 first_ctb_leaf_prev_intra: None,
                 first_ctb_leaf_mpm_prefix: None,
+                first_ctb_leaf_mpm_suffix: None,
             });
         }
         Ok(states)

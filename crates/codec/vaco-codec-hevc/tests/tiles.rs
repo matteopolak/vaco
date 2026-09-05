@@ -363,6 +363,27 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         second_mpm_suffix_error,
         Error::Unsupported("vaco-codec-hevc: first tile leaf has no mpm_idx suffix bin")
     ));
+    let first_luma_mode = tile_states
+        .first()
+        .expect("first tile state exists")
+        .resolve_first_ctb_leaf_luma_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile MPM index resolves to a luma mode");
+    assert_eq!(first_luma_mode, 1);
+    let second_luma_error = tile_states
+        .get(1)
+        .expect("second tile state exists")
+        .resolve_first_ctb_leaf_luma_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no measured MPM index");
+    assert!(matches!(
+        second_luma_error,
+        Error::Unsupported("vaco-codec-hevc: first tile leaf MPM index is not the measured mode")
+    ));
     let second_mpm_error = tile_states
         .get_mut(1)
         .expect("second tile state exists")
