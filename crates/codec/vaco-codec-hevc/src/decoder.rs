@@ -393,10 +393,10 @@ impl HevcDecoder {
                     .all(|&start| start % ctbs_x == 0)
                 && total_ctbs % ctbs_x == 0;
             // The only non-row-aligned shapes proven against conformance
-            // oracles are WPP-A, WPP-B, WPP-E, and WPP-F. WPP-A/B's rows use
-            // finite sets of mixed dependent/independent boundaries; keep
-            // every other partial shape refused until it has its own exact
-            // fixture.
+            // oracles are WPP-A, WPP-B, WPP-C, WPP-E, and WPP-F. WPP-A/B/C's
+            // rows use finite sets of mixed dependent/independent boundaries;
+            // keep every other partial shape refused until it has its own
+            // exact fixture.
             let wpp_a_shape = ctbs_x == 7
                 && total_ctbs == 28
                 && matches!(
@@ -421,6 +421,18 @@ impl HevcDecoder {
                         | [0, 15, 16, 17, 18, 26, 28, 31, 32, 39, 40, 41, 42, 43, 44, 52]
                         | [0, 15, 16, 18, 19, 26, 28, 31, 32, 39, 40, 41, 42, 43, 44, 52]
                 );
+            let wpp_c_shape = ctbs_x == 26
+                && total_ctbs == 390
+                && matches!(
+                    slice_starts.as_slice(),
+                    [0, 2, 3, 4, 5, 6, 26, 28, 29, 30, 31, 52, 54, 56, 58, 78]
+                        | [0, 2, 3, 5, 6, 26, 27, 28, 29, 30, 31, 32, 52, 54, 56, 78]
+                        | [0, 2, 3, 5, 26, 28, 52, 56, 58, 78, 79, 81, 82, 83, 84, 104]
+                        | [0, 26, 29, 31, 32, 52, 56, 57, 58, 78, 79, 80, 81, 82, 83, 104]
+                        | [0, 26, 78, 130, 182, 234, 286, 338]
+                        | [0, 28, 29, 30, 31, 52, 54, 57, 58, 78, 79, 80, 81, 82, 83, 104]
+                        | [0, 28, 29, 31, 32, 52, 54, 57, 58, 78, 79, 80, 81, 82, 83, 104]
+                );
             let bounded_partial_row = (ctbs_x == 2
                 && slice_starts.first().copied() == Some(0)
                 && slice_starts.get(1).copied() == Some(1))
@@ -429,8 +441,9 @@ impl HevcDecoder {
                     && slice_starts.get(1).copied() == Some(1)
                     && slice_starts.get(2).copied() == Some(3))
                 || wpp_a_shape
-                || wpp_b_shape;
-            let row_aligned_tail = (wpp_a_shape || wpp_b_shape)
+                || wpp_b_shape
+                || wpp_c_shape;
+            let row_aligned_tail = (wpp_a_shape || wpp_b_shape || wpp_c_shape)
                 || slice_starts
                     .iter()
                     .skip(if ctbs_x == 2 { 2 } else { 3 })
