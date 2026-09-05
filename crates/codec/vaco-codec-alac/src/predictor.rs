@@ -5,7 +5,7 @@
 //!
 //! An earlier version of this module was a sign-sign LMS filter of this
 //! crate's own design, chosen specifically to need no transmitted
-//! coefficients — because issue #285's brief read as a blanket prohibition
+//! coefficients — because an earlier brief was read as a blanket prohibition
 //! on consulting any ALAC reference. That was too strict: Apple's ALAC
 //! reference (<https://github.com/macosforge/alac>) is Apache License
 //! 2.0 — confirmed directly (`curl` the `LICENSE` file) — which sits outside
