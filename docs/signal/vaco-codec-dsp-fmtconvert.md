@@ -45,7 +45,9 @@ None — pure functions, no state, no allocation.
 
 ## Dependencies
 
-None beyond the standard library. No current caller in this tree yet
-(tracked the same way `vaco-codec-dsp-lpc` and `vaco-codec-dsp-intrapred`
-are — every audio decoder that would use it currently outputs `f32`
-planar directly and lets `vaco-resample` handle the rest).
+`vaco-simd` provides the portable-tier candidates for `int16_to_float` and
+`int32_to_float`. They are exact against the scalar loops and remain wired to
+the differential harness, but the public `i16` path stays scalar because the
+candidate has measured slower on this machine. No current codec caller uses
+this crate yet: audio decoders output `f32` planar directly and let
+`vaco-resample` handle final format conversion.

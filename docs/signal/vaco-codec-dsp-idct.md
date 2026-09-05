@@ -167,17 +167,16 @@ there is no QP, no bit depth (beyond `hevc::ClipRange`, below), no I/O.
   so forcing H.264/HEVC through it would mean re-deriving the standard's own
   tables in a rescaled basis for no shared implementation once written out.
 - **`vaco-core`** — the `Result`/`Error` type `mpeg2::Idct8x8::new` returns.
+- **`vaco-simd`** — portable runtime-tier dispatch for the independently
+  checked `simd::add_pixels_clamped_vector` candidate. The public entry point
+  deliberately remains scalar on this machine: the candidate is slower for
+  the measured block sizes, while `vaco-checkasm` keeps it differentially
+  checked against the scalar reference.
 - **`proptest`, `divan`** (dev-only) — property tests and benchmarks.
 
-No `vaco-simd`: every function here operates on 4–32 element arrays with a
-fixed shape known at compile time, and the specified/idiomatic scalar shape
-(`.iter().zip().sum()` for HEVC's dot product, a literal transliteration of
-the add/shift equations for H.264) is what this crate ships. A
-divan-measured alternative (splitting the HEVC size-32 dot product across 8
-manual `i64` accumulators, following plan 12's PF-0.3 recommendation) was
-**~2× slower**, not faster (`benches/idct.rs`), reproducing that plan
-amendment's own conclusion — "accumulator splitting must exceed the target's
-vector width, not match it" — on this crate's own kernel rather than
-assuming the earlier measurement transfers. No SIMD path is proposed here
-until a real profile shows this crate on a hot path where the specified
-scalar shape measurably loses.
+The fixed-shape IDCT cores themselves remain scalar: the H.264 butterfly is
+the specified operation, and the HEVC dot product is already a shape LLVM
+autovectorises well. A divan-measured size-32 HEVC alternative that split the
+sum across eight manual `i64` accumulators was about 2× slower
+(`benches/idct.rs`), so it is intentionally not shipped. Re-measure a new
+candidate against the scalar reference before changing the public dispatch.
