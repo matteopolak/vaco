@@ -686,22 +686,11 @@ impl<D: Demuxer> Discovery<D> {
             }
             let tb = stream.time_base;
             if let Some(start) = container_start {
-                stream.start_time = Timestamp::new(start.as_micros())
-                    .checked_rescale(
-                        vaco_core::TimeBase::MICROSECONDS,
-                        tb,
-                        vaco_core::Rounding::NearestAwayFromZero,
-                    )
-                    .unwrap_or(Timestamp::NONE);
+                stream.start_time = start.to_ticks(tb).map_or(Timestamp::NONE, Timestamp::new);
             }
             if stream.duration_ts.is_none()
                 && let Some(d) = container_duration
-                && let Some(ts) = Timestamp::new(d.as_micros()).checked_rescale(
-                    vaco_core::TimeBase::MICROSECONDS,
-                    tb,
-                    vaco_core::Rounding::NearestAwayFromZero,
-                )
-                && let Some(ticks) = ts.ticks()
+                && let Some(ticks) = d.to_ticks(tb)
             {
                 stream.set_duration_ts(ticks);
             }

@@ -763,7 +763,8 @@ change, verified each time with a full `cargo check --workspace
 
 - **`Discovery::finish`**: a stream discovery never saw a timestamp for
   takes the container's start time and duration, rescaled into its own
-  time base. Measured on Matroska: a subtitle-only file gets its duration
+  time base directly from the exact rational duration, never through display
+  microseconds. Measured on Matroska: a subtitle-only file gets its duration
   from the container even though the last subtitle event ends earlier, and
   the value disappears entirely on a pipe with no `Duration` element — so
   it comes from the container's own statement, not a packet scan or the
