@@ -177,24 +177,8 @@ impl Mode {
                 let (ai, bi) = (i32::from(a), i32::from(b));
                 match self {
                     Self::Normal => common::clamp_u8(ai),
-                    Self::Multiply => {
-                        #[allow(
-                            clippy::integer_division,
-                            reason = "a*b/255 is an exact floor by construction (fixed-point 8-bit blend math), not a lossy average"
-                        )]
-                        {
-                            common::clamp_u8(ai * bi / 255)
-                        }
-                    }
-                    Self::Screen => {
-                        #[allow(
-                            clippy::integer_division,
-                            reason = "the inner product/255 is an exact floor by construction, not a lossy average"
-                        )]
-                        {
-                            common::clamp_u8(255 - (255 - ai) * (255 - bi) / 255)
-                        }
-                    }
+                    Self::Multiply => common::clamp_u8(div255_floor(ai * bi)),
+                    Self::Screen => common::clamp_u8(255 - div255_floor((255 - ai) * (255 - bi))),
                     Self::Darken => common::clamp_u8(ai.min(bi)),
                     Self::Lighten => common::clamp_u8(ai.max(bi)),
                     Self::Average => common::clamp_u8(i32::midpoint(ai, bi)),
@@ -249,6 +233,13 @@ fn round_div(num: i32, den: i32) -> i32 {
     {
         (num + den / 2) / den
     }
+}
+
+/// `floor(product / 255)` for a product of two bytes, without a division.
+/// `product` is in `0..=255*255`, the range where the identity is exact.
+fn div255_floor(product: i32) -> i32 {
+    let incremented = product + 1;
+    (incremented + (incremented >> 8)) >> 8
 }
 
 #[derive(Debug, Clone, vaco_opts::Options)]
@@ -527,6 +518,20 @@ mod tests {
     fn normal_is_the_first_operand() {
         for a in [0u8, 50, 150, 255] {
             assert_eq!(Mode::Normal.apply(a, 150), a);
+        }
+    }
+
+    #[test]
+    fn div255_floor_matches_every_u8_product() {
+        for a in 0i32..=255 {
+            for b in 0i32..=255 {
+                #[allow(
+                    clippy::integer_division,
+                    reason = "the test oracle deliberately uses ordinary integer division"
+                )]
+                let expected = a * b / 255;
+                assert_eq!(div255_floor(a * b), expected, "a={a}, b={b}");
+            }
         }
     }
 

@@ -92,6 +92,10 @@ its frame walk copies each valid source-row span rather than evaluating a
 per-sample mode branch. Other modes retain the measured arithmetic path.
 At full opacity, the bitwise `and`/`or`/`xor` modes likewise use their direct
 row operations; fractional opacity keeps the shared measured mixing formula.
+`multiply` and `screen` use the exact bounded-product identity
+`floor(p / 255) = ((p + 1) + ((p + 1) >> 8)) >> 8` for `0 <= p <= 255²`;
+an exhaustive 65,536-product test pins that identity before either mode uses it.
+This removes the scalar division without changing the fixed-point result.
 
 **Not implemented**: `hardlight`, `overlay`, `softlight`, `hardmix`,
 `linearlight`, `vividlight`, `pinlight`, `reflect`, `phoenix`,
