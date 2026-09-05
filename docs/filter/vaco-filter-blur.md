@@ -87,6 +87,36 @@ A rounding convention split was also found and is easy to miss:
 gives `57` from `boxblur` and `56` from `avgblur` at the same position
 (`510/9 = 56.67`) — see `src/avgblur.rs`'s doc.
 
+### Performance slice: row-major vertical accumulation
+
+`common::box_pass` keeps the horizontal sliding-window pass and now walks
+the vertical pass row by row, maintaining one running sum per column. This
+preserves the separable `O(width*height)` arithmetic while matching the
+row-major storage layout; callers and rounding/border rules are unchanged.
+
+Measured end to end through `vvmpeg` on this machine (Apple silicon, 10
+cores), with a 90-frame 1920x1080 yuv420p Y4M fixture and
+`boxblur=luma_radius=8:luma_power=2`, release `dist` builds in a private
+target directory, `-threads 1`, and ten rotated before/after/ffmpeg rounds:
+
+| implementation | median wall | median child CPU | output |
+|---|---:|---:|---|
+| before (column-major vertical pass) | 2.904 s | 2.895 s | 279,936,000 bytes |
+| after (row-major vertical pass) | 1.130 s | 1.120 s | 279,936,000 bytes |
+| ffmpeg 9.0.1 | 0.501 s | 0.570 s | 279,936,000 bytes |
+
+The candidate is 2.57x faster by wall time and 2.58x by child CPU time than
+the prior implementation. Instruments' `CPU Counters` exported `Cycles`
+fell from 12,949,219 to 7,628,092 in paired runs (0.589x). Samply still
+resolves `common::box_pass` as the hot CLI callee (99.06% of in-process
+samples after the change; 99.69% before). Before and after output hashes
+are identical (`b25a3f7956948abf…`); the candidate is deterministic at
+`-threads 1/2/4/8`, with the same byte count and hash at each setting.
+Against ffmpeg, the candidate's mean absolute byte difference is 0.0204
+(max 34; 98.6% of bytes equal), a small, unstructured rounding/border
+deviation already documented for this filter family rather than a geometry
+or sequence drift.
+
 ### `unsharp`: verified via an analytic invariant
 
 A box average of a linear ramp equals the ramp's own value at the window's

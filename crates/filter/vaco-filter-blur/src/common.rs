@@ -229,34 +229,35 @@ pub(crate) fn box_pass(
         horiz.push(h_row);
     }
 
-    // Vertical pass: a running sum down each column of `horiz`, same
-    // clamp-at-edge shape, writing straight into the row-major output.
-    let mut out: Vec<Vec<u8>> = Vec::new();
-    for _ in 0..uh {
-        out.push(vec![0u8; uw]);
-    }
-    for x in 0..uw {
-        let clamped = |yi: i32| -> i64 {
-            let cy = yi.clamp(0, h - 1);
-            usize::try_from(cy)
-                .ok()
-                .and_then(|i| horiz.get(i))
-                .and_then(|r| r.get(x))
-                .copied()
-                .unwrap_or(0)
-        };
-        let mut sum: i64 = (-ry..=ry).map(clamped).sum();
-        if let Some(dst_row) = out.first_mut()
-            && let Some(cell) = dst_row.get_mut(x)
-        {
-            *cell = round_avg(sum, count, rounding);
+    // Vertical pass: keep one running sum per column, but visit rows in
+    // storage order. The old column-major walk repeatedly jumped between
+    // rows, making the hot loop pay for pointer chasing and cache misses.
+    let mut out: Vec<Vec<u8>> = (0..uh).map(|_| vec![0u8; uw]).collect();
+    let mut sums = vec![0i64; uw];
+    let row_at = |yi: i32| -> &[i64] {
+        let cy = yi.clamp(0, h - 1);
+        usize::try_from(cy)
+            .ok()
+            .and_then(|i| horiz.get(i))
+            .map_or(&[][..], Vec::as_slice)
+    };
+    for yi in -ry..=ry {
+        for (sum, &sample) in sums.iter_mut().zip(row_at(yi).iter()) {
+            *sum += sample;
         }
-        for y in 1..uh {
+    }
+    for y in 0..uh {
+        if y != 0 {
             let yi = to_i32(y);
-            sum += clamped(yi + ry) - clamped(yi - ry - 1);
-            if let Some(dst_row) = out.get_mut(y)
-                && let Some(cell) = dst_row.get_mut(x)
+            let entering = row_at(yi + ry);
+            let leaving = row_at(yi - ry - 1);
+            for (sum, (&enter, &leave)) in sums.iter_mut().zip(entering.iter().zip(leaving.iter()))
             {
+                *sum += enter - leave;
+            }
+        }
+        if let Some(dst_row) = out.get_mut(y) {
+            for (cell, &sum) in dst_row.iter_mut().zip(sums.iter()) {
                 *cell = round_avg(sum, count, rounding);
             }
         }
