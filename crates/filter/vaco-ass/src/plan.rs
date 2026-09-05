@@ -289,7 +289,7 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
                     });
                 }
                 apply_tag(&mut cursor, &name, arg.as_deref(), &mut drawing_depth);
-                if !was_drawing && drawing_depth != 0 {
+                if drawing_depth != 0 {
                     let mut style = cursor.cur.clone();
                     apply_fade(
                         &mut style,
@@ -1161,6 +1161,25 @@ mod tests {
         assert_eq!(plan.drawings[0].scale, 2);
         assert_eq!(plan.drawings[0].baseline_offset, -12.0);
         assert_eq!(plan.drawings[0].commands, "m 0 0 l 200 0 200 200");
+    }
+
+    #[test]
+    fn drawing_style_captures_point_in_time_transform_before_mode() {
+        let (script, event) = one_event(r"{\t(0,2000,\frz90)\p2}m 0 0 l 100 0 100 20{\p0}");
+        let before = plan_event_at(&script, &event, Duration::from_micros(100_000));
+        let middle = plan_event_at(&script, &event, Duration::from_micros(1_000_000));
+        let after = plan_event_at(&script, &event, Duration::from_micros(1_900_000));
+
+        assert_eq!(before.drawings[0].style.angle_z, 4.5);
+        assert_eq!(middle.drawings[0].style.angle_z, 45.0);
+        assert_eq!(after.drawings[0].style.angle_z, 85.5);
+    }
+
+    #[test]
+    fn drawing_style_updates_for_transform_after_mode() {
+        let (script, event) = one_event(r"{\p2\t(0,2000,\frz90)}m 0 0 l 100 0 100 20{\p0}");
+        let middle = plan_event_at(&script, &event, Duration::from_micros(1_000_000));
+        assert_eq!(middle.drawings[0].style.angle_z, 45.0);
     }
 
     #[test]

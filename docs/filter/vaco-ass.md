@@ -54,7 +54,7 @@ forms adjust all four rendered colour alphas. `\fax`/`\fay` resolve horizontal
 and vertical shear factors, including interpolation inside `\t(...)`.
 `\frx`/`\fry`/`\frz`/`\fr` carry static X/Y/Z angles on each run and `\org`
 carries the optional line rotation origin; `vaco-filter-subtitle` projects
-both rotations and shears when rasterising the plan. See
+both rotations and shears when rasterising text or `\p` drawing masks. See
 `plan.rs`'s own doc for the full, current list — it is the authority,
 not this file.
 
@@ -68,7 +68,9 @@ not this file.
   motion/fade value; do not retain a per-frame animation list.
 - Rotation geometry belongs in `vaco-filter-subtitle`; this crate keeps
   `\frx`/`\fry`/`\frz` and `\org` in script coordinates so the renderer
-  can scale the pivot and camera distance exactly once.
+  can scale the pivot and camera distance exactly once. Drawing runs capture
+  the resolved style while drawing mode is active, so animated transforms can
+  appear on either side of the drawing-mode tag in the override block.
 - Shear geometry belongs in `vaco-filter-subtitle`; this crate keeps
   `\fax`/`\fay` as bounded style factors so the frame renderer can compose
   them with projective rotation.

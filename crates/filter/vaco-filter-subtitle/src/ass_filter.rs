@@ -305,11 +305,39 @@ fn render_drawings(
                     .collect()
             })
             .collect();
+        let style = &drawing.style;
         let mut mask = rasterise_drawing(&translated, renderer.budget_mut())?;
+        let angles = (style.angle_x, style.angle_y, style.angle_z);
+        let shear = (style.shear_x, style.shear_y);
+        if [angles.0, angles.1, angles.2]
+            .iter()
+            .all(|angle| angle.is_finite())
+            && [angles.0, angles.1, angles.2]
+                .iter()
+                .any(|angle| angle.rem_euclid(360.0).abs() > f64::EPSILON)
+            || [shear.0, shear.1].iter().all(|factor| factor.is_finite())
+                && [shear.0, shear.1]
+                    .iter()
+                    .any(|factor| factor.abs() > f64::EPSILON)
+        {
+            let rotation_origin = plan
+                .origin
+                .map(|(x, y)| (x * scale_x, y * scale_y))
+                .filter(|(x, y)| x.is_finite() && y.is_finite())
+                .unwrap_or((target_x, target_y));
+            mask = project_mask(
+                &mask,
+                renderer.budget_mut(),
+                rotation_origin,
+                angles,
+                shear,
+                ASS_CAMERA_DISTANCE * scale_y,
+                (width, height),
+            )?;
+        }
         if let Some(clip) = plan.clip {
             apply_clip(&mut mask, clip, scale_x, scale_y);
         }
-        let style = &drawing.style;
         if style.shadow > 0.0 {
             let (dx, dy) = shadow_px(style.shadow, scale_x, scale_y);
             mask::composite(
@@ -1291,6 +1319,40 @@ mod tests {
         let script = "[Script Info]\nPlayResX: 320\nPlayResY: 240\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\nStyle: Default,Arial,20,&H00FFFFFF,&H00000000,&H00000000,0,1,0,0,7,0,0,0\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,{\\pos(40,30)\\p2}m 0 0 l 200 0 200 200 0 200{\\p0}\n";
         let bounds = render_bounds(script);
         assert_eq!(bounds, (40, 30, 100, 100));
+    }
+
+    #[test]
+    fn p_drawing_frz90_real_render_changes_geometry() {
+        let script = include_str!("../tests/data/p-drawing-frz90.ass");
+        let identity_script = script.replace(r"\frz90", "");
+        let identity = render_bounds_at(&identity_script, Duration::ZERO);
+        let rotated = render_bounds_at(script, Duration::from_micros(1_000_000));
+
+        assert!(
+            identity.2 > identity.3.saturating_mul(3),
+            "identity={identity:?}"
+        );
+        assert!(
+            rotated.3 > rotated.2.saturating_mul(3),
+            "rotated={rotated:?}"
+        );
+        assert!(rotated.2.abs_diff(20) <= 8, "rotated={rotated:?}");
+        assert!(rotated.3.abs_diff(100) <= 16, "rotated={rotated:?}");
+    }
+
+    #[test]
+    fn p_drawing_animated_frz90_changes_at_reference_time_points() {
+        let script = include_str!("../tests/data/t-p-drawing-frz90.ass");
+        let before = render_bounds_at(script, Duration::from_micros(100_000));
+        let midpoint = render_bounds_at(script, Duration::from_micros(1_000_000));
+        let after = render_bounds_at(script, Duration::from_micros(1_900_000));
+
+        assert!(before.2 > before.3.saturating_mul(3), "before={before:?}");
+        assert!(
+            midpoint.2.abs_diff(midpoint.3) <= 16,
+            "midpoint={midpoint:?}"
+        );
+        assert!(after.3 > after.2.saturating_mul(3), "after={after:?}");
     }
 
     #[test]

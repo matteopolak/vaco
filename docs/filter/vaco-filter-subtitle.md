@@ -26,7 +26,10 @@ construction, not a stream.
   distance, scaled to the frame. Its inverse-mapped mask is bounded to
   the projected corners before allocation; a camera-plane crossing uses
   the frame as its finite sampling bound. It is then clipped and
-  composited through the same path as unrotated text. `render_at` supplies
+  composited through the same path as unrotated text. `\p` drawing masks use
+  the same bounded inverse projection, so vector drawings and text share
+  rotation/shear and `\org` semantics while the zero-transform drawing path
+  remains unchanged. `render_at` supplies
   its frame timestamp to `vaco-ass`, so supported style, X/Y/Z rotation, and
   `\fax`/`\fay` shear tags nested in `\t(...)` interpolate before layout and
   projection. The plan holds only the resolved state for that instant rather than an
@@ -61,7 +64,10 @@ construction, not a stream.
 - `BorderStyle=3`: `ass_filter.rs`'s composite step would need an
   opaque-box path alongside its current outline+shadow one.
 - Transform interpolation belongs in `vaco-ass`'s point-in-time planner;
-  only vector clips remain outside the projective mask helper.
+  only vector clips remain outside the projective mask helper. Drawing
+  transforms use the resolved style while drawing mode is active, so an
+  animated `\t(...)` may appear before or after `\p<n>` in the same override
+  block.
   Karaoke text is laid out syllable-by-syllable so `\k` can switch a fill,
   `\K`/`\kf` can sweep it left-to-right, and `\ko` can withhold its outline
   before highlight. `\p` drawings use bounded even-odd mask rasterisation
@@ -92,3 +98,6 @@ The exact transform-animation fixture changes its visible bounds from
 at 3.5 seconds. Shear-only fixtures report `86x31` without shear,
 `107x31` with `\fax1`, and `86x107` with `\fay1`; combining `\frz90\fax1`
 reports `33x169` versus `31x107` for the rotation-only and combined fixtures.
+For the rectangular `\p2` drawing fixture, libass reports `100x20` before a
+`\frz90` animation and `20x100` at the endpoint; the 0.25-second samples
+report `100x20`, `102x40`, `100x58`, and `94x72` before the square midpoint.
