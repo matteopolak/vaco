@@ -830,10 +830,11 @@ crate decides what becomes a stream:
 * **Every `grid` item becomes a `TileGrid` stream group**, not a stream:
   `dimg` names the tiles in raster order, the descriptor (read from `idat`
   for `construction_method 1`, from the file for 0) gives rows, columns
-  and output size, and the tiles' own `ispe` gives the canvas (`coded_*`)
-  and per-tile offsets. A grid whose tile count is not `rows × columns`,
-  whose tiles are not streams or do not share one `ispe` size, or whose output
-  exceeds its canvas produces **no group** rather than a wrong one. An
+  and output size; the grid's own `ispe` must agree with that output, and the
+  tiles' `ispe` gives the canvas (`coded_*`) and per-tile offsets. A grid whose
+  tile count is not `rows × columns`, whose tiles are not streams or do not
+  share one `ispe` size, whose `ispe` disagrees with its descriptor, or whose
+  output exceeds its canvas produces **no group** rather than a wrong one. An
   associated `clap` property is
   resolved over the grid's reconstructed output using HEIF §6.5.9 and
   ISOBMFF §12.1.4 centre-offset semantics, then folded into the group's

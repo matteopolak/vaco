@@ -782,8 +782,9 @@ Named so the demuxer's author knows what is not here:
   `item_name` (a stream's `title` tag) and `ItemLocation` its
   `data_reference_index` for that. `CleanAperture::integer_crop` now parses
   `clap`'s eight rational fields and resolves the exact integer crop consumed
-  by a tile-grid caller; half-pixel centre offsets are retained when the
-  resulting edges are integral, while zero denominators, fractional edges and
+  by a tile-grid caller. The item resolver requires a grid's `ispe` output
+  dimensions to match its `ImageGrid` descriptor; half-pixel centre offsets
+  are retained when the resulting edges are integral, while zero denominators, fractional edges and
   out-of-bounds apertures are refused. `iloc` accepts only its defined `0`,
   `4`, and `8` byte field widths and versions `0` through `2`; its v1/v2
   `construction_method` is exactly `0`, `1`, or `2` (including zero reserved

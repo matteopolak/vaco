@@ -299,6 +299,21 @@ fn a_grid_with_mismatched_tile_geometry_is_refused() {
 }
 
 #[test]
+fn a_grid_with_an_ispe_that_disagrees_with_its_descriptor_is_refused() {
+    let mut bytes = heif();
+    let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
+    // Item 3 is the grid. Point its first property at tile A's 16x8 `ispe`
+    // instead of its own 30x8 property, while its descriptor still says 30x8.
+    bytes[ipma + 23] = 1;
+    let demux = open(bytes);
+    assert_eq!(demux.streams().len(), 3, "coded items remain reachable");
+    assert!(
+        demux.stream_groups().is_empty(),
+        "the grid property and descriptor must name the same output dimensions"
+    );
+}
+
+#[test]
 fn a_truncated_property_association_table_refuses_the_item_file() {
     let mut bytes = heif();
     let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();

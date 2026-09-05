@@ -389,6 +389,9 @@ impl<'a> Meta<'a> {
             _ => read(&extents)?,
         };
         let grid = ImageGrid::parse(&bytes)?;
+        if self.ispe(info.item_id)? != (grid.output_width, grid.output_height) {
+            return None;
+        }
 
         let tiles = self
             .irefs
