@@ -26,6 +26,7 @@ vaco-pool = { path = "../../model/vaco-pool" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-hash = { path = "../../core/vaco-hash" }
 
 [lints]
 workspace = true

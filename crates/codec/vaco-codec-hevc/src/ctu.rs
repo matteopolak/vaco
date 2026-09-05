@@ -163,6 +163,12 @@ pub(crate) struct Ctx<'p> {
     /// when WPP is active — `pub` because that reset happens in
     /// `decoder.rs`, a different module.
     pub qp_y_prev: i32,
+    /// Raster CTB range of the independent slice segment currently being
+    /// decoded.  Syntax neighbours and intra reference samples outside this
+    /// range are unavailable even when an earlier segment has reconstructed
+    /// them already (H.265 §6.4.1).
+    slice_start_ctb: u32,
+    slice_end_ctb: u32,
     /// §8.6.1's `qPY_PRED` for the *current* quantisation group, cached at
     /// the QG's own reset ([`coding_quadtree`]) rather than recomputed per
     /// coding unit, since it is a pure function of the QG's own position and
@@ -409,6 +415,8 @@ impl<'p> Ctx<'p> {
             shared,
             pic,
             qp_y_prev: slice_qp,
+            slice_start_ctb: 0,
+            slice_end_ctb: u32::MAX,
             qg_qp_pred: slice_qp,
             is_cu_qp_delta_coded: false,
             cu_qp_delta_val: 0,
@@ -456,6 +464,8 @@ impl<'p> Ctx<'p> {
             recon,
             cu_grid: self.cu_grid.clone(),
             qp_y_prev: self.qp_y_prev,
+            slice_start_ctb: self.slice_start_ctb,
+            slice_end_ctb: self.slice_end_ctb,
             qg_qp_pred: self.qg_qp_pred,
             is_cu_qp_delta_coded: self.is_cu_qp_delta_coded,
             cu_qp_delta_val: self.cu_qp_delta_val,
@@ -497,6 +507,38 @@ impl<'p> Ctx<'p> {
         self.cu_grid
             .budget_bytes()
             .saturating_add(self.sao_params.budget_bytes())
+    }
+
+    /// Start an independent slice segment.  CABAC context state is local to
+    /// the caller, while the QP predictor and spatial-neighbour availability
+    /// are the two pieces of this CTU walk that must restart at its boundary.
+    pub(crate) fn begin_slice_segment(&mut self, start_ctb: u32, end_ctb: u32, slice_qp: i32) {
+        self.slice_start_ctb = start_ctb;
+        self.slice_end_ctb = end_ctb;
+        self.qp_y_prev = slice_qp;
+        self.qg_qp_pred = slice_qp;
+        self.is_cu_qp_delta_coded = false;
+        self.cu_qp_delta_val = 0;
+        self.cu_transquant_bypass = false;
+    }
+
+    /// Whether a picture-coordinate neighbour belongs to this segment.
+    /// Coordinates outside the picture are unavailable by the same test.
+    #[allow(
+        clippy::integer_division,
+        reason = "CTB coordinates deliberately truncate picture coordinates by the fixed CTB width"
+    )]
+    pub(crate) fn in_current_slice(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= self.shared.pic_width || y >= self.shared.pic_height {
+            return false;
+        }
+        let ctb = 1i32 << self.shared.log2_ctb_size;
+        let ctb_x = u32::try_from(x / ctb).unwrap_or(u32::MAX);
+        let ctb_y = u32::try_from(y / ctb).unwrap_or(u32::MAX);
+        let addr = ctb_y
+            .saturating_mul(self.shared.ctbs_x)
+            .saturating_add(ctb_x);
+        addr >= self.slice_start_ctb && addr < self.slice_end_ctb
     }
 }
 
@@ -676,6 +718,8 @@ pub(crate) fn decode_ctu(
             s.shared.sao_luma,
             s.shared.sao_chroma,
             &s.sao_params,
+            s.in_current_slice(x0 - 1, y0),
+            s.in_current_slice(x0, y0 - 1),
         )?;
         s.sao_params.set(addr, &params);
     }
@@ -700,14 +744,14 @@ fn coding_quadtree(
     } else if at_min {
         false
     } else {
-        let left = s
-            .cu_grid
-            .depth_at(x0 - 1, y0)
-            .is_some_and(|d| u32::from(d) > depth);
-        let above = s
-            .cu_grid
-            .depth_at(x0, y0 - 1)
-            .is_some_and(|d| u32::from(d) > depth);
+        let left = s.in_current_slice(x0 - 1, y0)
+            && s.cu_grid
+                .depth_at(x0 - 1, y0)
+                .is_some_and(|d| u32::from(d) > depth);
+        let above = s.in_current_slice(x0, y0 - 1)
+            && s.cu_grid
+                .depth_at(x0, y0 - 1)
+                .is_some_and(|d| u32::from(d) > depth);
         let inc = u32::from(left) + u32::from(above);
         let cm = ctx
             .split_cu_flag
@@ -1012,8 +1056,12 @@ fn decode_intra_cu(
     // fixture can exercise.
     let ctb_size = 1i32 << s.shared.log2_ctb_size;
     for (i, pu) in pus.iter().enumerate() {
-        let left = s.cu_grid.mode_at(pu.x - 1, pu.y);
-        let above = if pu.y % ctb_size == 0 {
+        let left = if s.in_current_slice(pu.x - 1, pu.y) {
+            s.cu_grid.mode_at(pu.x - 1, pu.y)
+        } else {
+            DC_IDX
+        };
+        let above = if pu.y % ctb_size == 0 || !s.in_current_slice(pu.x, pu.y - 1) {
             DC_IDX
         } else {
             s.cu_grid.mode_at(pu.x, pu.y - 1)
@@ -1109,7 +1157,8 @@ fn decode_intra_cu(
 /// `getCtxSkipFlag`: `(left is skip) + (above is skip)`, both `0` when
 /// unavailable — the CU's own top-left corner, not each PU's.
 fn ctx_skip_flag(s: &Ctx<'_>, x0: i32, y0: i32) -> usize {
-    usize::from(s.cu_grid.is_skip_at(x0 - 1, y0)) + usize::from(s.cu_grid.is_skip_at(x0, y0 - 1))
+    usize::from(s.in_current_slice(x0 - 1, y0) && s.cu_grid.is_skip_at(x0 - 1, y0))
+        + usize::from(s.in_current_slice(x0, y0 - 1) && s.cu_grid.is_skip_at(x0, y0 - 1))
 }
 
 /// `parseMergeIndex`/§9.3.3.2: a truncated-unary code, `cMax =
@@ -1658,6 +1707,7 @@ fn resolve_merge_candidate(
         temporal_l0,
         temporal_l1,
         inter.is_b,
+        |x, y| s.in_current_slice(x, y),
     );
     let mut chosen = cands.get(merge_idx).copied().ok_or(Error::InvalidData(
         "vaco-codec-hevc: merge_idx out of range",
@@ -2179,6 +2229,7 @@ fn decode_inter_cu(
                         target_ref_poc,
                         RefList::L0,
                         temporal,
+                        |x, y| s.in_current_slice(x, y),
                     );
                     let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
                     Some(UniMotion {
@@ -2240,6 +2291,7 @@ fn decode_inter_cu(
                         target_ref_poc,
                         RefList::L1,
                         temporal,
+                        |x, y| s.in_current_slice(x, y),
                     );
                     let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
                     Some(UniMotion {
@@ -2918,7 +2970,10 @@ fn reconstruct_luma(
         y0,
         size,
         s.shared.bit_depth_luma,
-        |nx, ny| !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none(),
+        |nx, ny| {
+            s.in_current_slice(nx, ny)
+                && (!s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none())
+        },
     );
     let filtered;
     let ref_line = if intra_pred::should_filter(mode, size, true) {
@@ -2997,7 +3052,11 @@ fn reconstruct_chroma(
         cy0,
         size,
         s.shared.bit_depth_chroma,
-        |nx, ny| !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none(),
+        |nx, ny| {
+            let (lx, ly) = (nx << 1, ny << 1);
+            s.in_current_slice(lx, ly)
+                && (!s.shared.constrained_intra_pred || s.cu_grid.inter_at(lx, ly).is_none())
+        },
     );
     let mut pred = vec![0u16; size * size];
     // Chroma never smooths its reference samples at 4:2:0 (see the crate
@@ -3073,7 +3132,11 @@ fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode
         cy0,
         size,
         s.shared.bit_depth_chroma,
-        |nx, ny| !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none(),
+        |nx, ny| {
+            let (lx, ly) = (nx << 1, ny << 1);
+            s.in_current_slice(lx, ly)
+                && (!s.shared.constrained_intra_pred || s.cu_grid.inter_at(lx, ly).is_none())
+        },
     );
     let mut pred = vec![0u16; size * size];
     intra_pred::predict(

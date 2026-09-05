@@ -44,9 +44,9 @@ fn iz(x: usize) -> i32 {
 /// bottom-left-most sample), and `line[2*size+1+i]` for `i` in `0..2*size-1`
 /// is `p[i][-1]` (the top row extending right past the block).
 ///
-/// Built directly from [`ReconPlane::is_ready`]/[`ReconPlane::get`] rather than a
-/// z-scan availability derivation — see `framebuf`'s module doc for why
-/// those coincide exactly in this crate's one-slice, no-tile scope.
+/// Built directly from [`ReconPlane::is_ready`]/[`ReconPlane::get`] together
+/// with the caller's current-slice gate rather than a z-scan availability
+/// derivation — see `framebuf`'s module doc for why those reproduce §6.4.1.
 ///
 /// `is_intra_neighbor(x, y)` is §8.4.4.2.2's `constrained_intra_pred_flag`
 /// gate: "when `constrained_intra_pred_flag` is equal to 1 ... the sample is

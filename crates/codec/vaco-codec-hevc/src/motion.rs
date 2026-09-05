@@ -396,8 +396,14 @@ fn spatial_positions(pu: PuRect) -> SpatialPositions {
 /// distinct from "available but a duplicate of an earlier slot" (which is
 /// also `None` in the final merge list but for a different reason, tracked
 /// only implicitly by simply not pushing a duplicate).
-fn lookup(grid: &CuGrid<'_>, pos: (i32, i32)) -> Option<MotionInfo> {
-    grid.inter_at(pos.0, pos.1)
+fn lookup(
+    grid: &CuGrid<'_>,
+    pos: (i32, i32),
+    is_available: &impl Fn(i32, i32) -> bool,
+) -> Option<MotionInfo> {
+    is_available(pos.0, pos.1)
+        .then(|| grid.inter_at(pos.0, pos.1))
+        .flatten()
 }
 
 /// §8.5.3.2.2/.3: derive up to `max_num_merge_cand` merge candidates for one
@@ -432,6 +438,7 @@ pub(crate) fn derive_merge_candidates(
     temporal_l0: TemporalCandidate,
     temporal_l1: TemporalCandidate,
     is_b: bool,
+    is_available: impl Fn(i32, i32) -> bool,
 ) -> Vec<MotionInfo> {
     let mut cands: Vec<MotionInfo> = Vec::new();
     if max_num_merge_cand == 0 {
@@ -452,7 +459,7 @@ pub(crate) fn derive_merge_candidates(
         );
 
     let a1 = (!a1_excluded && is_diff_mer(pos.a1.0, pos.a1.1, x_p, y_p, log2_parallel_merge_level))
-        .then(|| lookup(grid, pos.a1))
+        .then(|| lookup(grid, pos.a1, &is_available))
         .flatten();
     if let Some(m) = a1 {
         cands.push(m);
@@ -461,7 +468,7 @@ pub(crate) fn derive_merge_candidates(
     if cands.len() < max_num_merge_cand {
         let b1 = (!b1_excluded
             && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
-        .then(|| lookup(grid, pos.b1))
+        .then(|| lookup(grid, pos.b1, &is_available))
         .flatten();
         if let Some(m) = b1
             && a1 != Some(m)
@@ -473,10 +480,10 @@ pub(crate) fn derive_merge_candidates(
     if cands.len() < max_num_merge_cand {
         let b1 = (!b1_excluded
             && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
-        .then(|| lookup(grid, pos.b1))
+        .then(|| lookup(grid, pos.b1, &is_available))
         .flatten();
         let b0 = (is_diff_mer(pos.b0.0, pos.b0.1, x_p, y_p, log2_parallel_merge_level))
-            .then(|| lookup(grid, pos.b0))
+            .then(|| lookup(grid, pos.b0, &is_available))
             .flatten();
         if let Some(m) = b0
             && b1 != Some(m)
@@ -487,7 +494,7 @@ pub(crate) fn derive_merge_candidates(
 
     if cands.len() < max_num_merge_cand {
         let a0 = (is_diff_mer(pos.a0.0, pos.a0.1, x_p, y_p, log2_parallel_merge_level))
-            .then(|| lookup(grid, pos.a0))
+            .then(|| lookup(grid, pos.a0, &is_available))
             .flatten();
         if let Some(m) = a0
             && a1 != Some(m)
@@ -499,10 +506,10 @@ pub(crate) fn derive_merge_candidates(
     if cands.len() < max_num_merge_cand && cands.len() < 4 {
         let b1 = (!b1_excluded
             && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
-        .then(|| lookup(grid, pos.b1))
+        .then(|| lookup(grid, pos.b1, &is_available))
         .flatten();
         let b2 = (is_diff_mer(pos.b2.0, pos.b2.1, x_p, y_p, log2_parallel_merge_level))
-            .then(|| lookup(grid, pos.b2))
+            .then(|| lookup(grid, pos.b2, &is_available))
             .flatten();
         if let Some(m) = b2
             && a1 != Some(m)
@@ -638,6 +645,7 @@ pub(crate) fn derive_amvp_candidates(
     target_ref_poc: i64,
     target_list: RefList,
     temporal: TemporalCandidate,
+    is_available: impl Fn(i32, i32) -> bool,
 ) -> [Mv; 2] {
     let _ = log2_parallel_merge_level; // AMVP's own neighbour search has no MER gate (§8.5.3.2.7 has none); kept as a parameter for call-site symmetry with merge, unused here.
     let pos = spatial_positions(pu);
@@ -645,8 +653,8 @@ pub(crate) fn derive_amvp_candidates(
     // Left group: below-left then left, unscaled first, then the same order
     // scaled. `is_scaled_flag` (HM's own name) gates whether the *above*
     // group's scaled search runs at all.
-    let below_left = grid.inter_at(pos.a0.0, pos.a0.1);
-    let left = grid.inter_at(pos.a1.0, pos.a1.1);
+    let below_left = lookup(grid, pos.a0, &is_available);
+    let left = lookup(grid, pos.a1, &is_available);
     let is_scaled_flag = below_left.is_some() || left.is_some();
 
     let mut cands: Vec<Mv> = Vec::new();
@@ -666,9 +674,9 @@ pub(crate) fn derive_amvp_candidates(
         push_unique(m, &mut cands);
     }
 
-    let above_right = grid.inter_at(pos.b0.0, pos.b0.1);
-    let above = grid.inter_at(pos.b1.0, pos.b1.1);
-    let above_left = grid.inter_at(pos.b2.0, pos.b2.1);
+    let above_right = lookup(grid, pos.b0, &is_available);
+    let above = lookup(grid, pos.b1, &is_available);
+    let above_left = lookup(grid, pos.b2, &is_available);
 
     if let Some(m) = amvp_unscaled(above_right, target_list, target_ref_poc)
         .or_else(|| amvp_unscaled(above, target_list, target_ref_poc))
@@ -856,7 +864,7 @@ mod tests {
             w: 16,
             h: 16,
         };
-        let cands = derive_amvp_candidates(&grid, pu, 2, 10, 8, RefList::L0, None);
+        let cands = derive_amvp_candidates(&grid, pu, 2, 10, 8, RefList::L0, None, |_, _| true);
         assert_eq!(cands, [Mv::ZERO, Mv::ZERO]);
     }
 
@@ -892,6 +900,7 @@ mod tests {
             None,
             None,
             false,
+            |_, _| true,
         );
         assert_eq!(cands.len(), 5);
         let expect_idx = [0usize, 1, 0, 0, 0];
@@ -934,6 +943,7 @@ mod tests {
             None,
             None,
             true,
+            |_, _| true,
         );
         assert_eq!(cands.len(), 5);
         let expect_idx = [0usize, 1, 0, 0, 0];
@@ -983,6 +993,7 @@ mod tests {
             temporal_l0,
             temporal_l1,
             true,
+            |_, _| true,
         );
         assert_eq!(cands.len(), 5);
         for c in &cands {
@@ -1026,7 +1037,7 @@ mod tests {
             w: 16,
             h: 16,
         };
-        let cands = derive_amvp_candidates(&grid, pu, 2, 10, 8, RefList::L0, None);
+        let cands = derive_amvp_candidates(&grid, pu, 2, 10, 8, RefList::L0, None, |_, _| true);
         assert_eq!(cands[0], Mv { x: 40, y: -8 });
     }
 }

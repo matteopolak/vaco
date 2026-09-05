@@ -135,12 +135,11 @@ impl HevcDecoder {
             return Ok(());
         }
 
-        // Locate this access unit's one primary-coded-picture slice —
+        // Locate this access unit's primary-coded-picture slice segments —
         // `vaco_format_nalu::units` is the same reusable, `Framing`-aware
         // NAL-unit iterator `HevcParser` itself is built on, not a second
         // parser.
-        let mut slice_nal: Option<&[u8]> = None;
-        let mut slice_count = 0u32;
+        let mut slice_nals: Vec<&[u8]> = Vec::new();
         // ATSC A/53 closed captions (interface gap 18's attachment half —
         // extraction is `vaco_parse_hevc::a53`, already landed). See
         // `vaco-codec-h264::decoder`'s identical comment for why this
@@ -159,10 +158,7 @@ impl HevcDecoder {
                 continue;
             }
             if header.nal_unit_type.has_slice_header() {
-                slice_count += 1;
-                if slice_nal.is_none() {
-                    slice_nal = Some(nal.data);
-                }
+                slice_nals.push(nal.data);
             } else if header.nal_unit_type.is_sei() {
                 self.rbsp.fill(nal.data, &mut self.budget)?;
                 if let Ok(messages) = sei::parse(self.rbsp.as_slice(), None, &mut self.budget) {
@@ -199,24 +195,19 @@ impl HevcDecoder {
                 }
             }
         }
-        if slice_count > 1 {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: more than one slice segment per picture is not supported",
-            ));
-        }
-        let Some(ebsp) = slice_nal else { return Ok(()) };
-        let header = HevcNalHeader::parse(ebsp)
+        let Some(first_ebsp) = slice_nals.first().copied() else {
+            return Ok(());
+        };
+        let header = HevcNalHeader::parse(first_ebsp)
             .ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
         if rasl_can_be_ignored(header.nal_unit_type, self.rasl_output_suppression_poc) {
             return Ok(());
         }
 
-        self.rbsp.fill(ebsp, &mut self.budget)?;
-        let rbsp = self.rbsp.as_slice();
-
-        let pps_id = vaco_parse_hevc::slice::peek_pps_id(rbsp).ok_or(Error::InvalidData(
-            "vaco-codec-hevc: slice segment header truncated before pps_id",
-        ))?;
+        self.rbsp.fill(first_ebsp, &mut self.budget)?;
+        let pps_id = vaco_parse_hevc::slice::peek_pps_id(self.rbsp.as_slice()).ok_or(
+            Error::InvalidData("vaco-codec-hevc: slice segment header truncated before pps_id"),
+        )?;
         // Cloned rather than borrowed: the CTU walk below needs `&mut
         // self.budget` for the rest of this function, which a borrow of
         // `self.parser`'s tables held open across that call would conflict
@@ -234,10 +225,14 @@ impl HevcDecoder {
 
         check_scope(&sps, &pps)?;
 
-        let mut reader = vaco_bitstream::BitReader::new(rbsp);
-        reader.skip(16);
-        let hdr = SliceHeader::parse_data(&mut reader, header, &sps, &pps, &mut self.budget)?;
-        reader.check()?;
+        let hdr = {
+            let mut reader = vaco_bitstream::BitReader::new(self.rbsp.as_slice());
+            reader.skip(16);
+            let parsed =
+                SliceHeader::parse_data(&mut reader, header, &sps, &pps, &mut self.budget)?;
+            reader.check()?;
+            parsed
+        };
 
         // B-slices: `inter_pred_idc`/`ref_idx_l1`/`mvd_coding(x, y, 1)`/
         // `mvp_l1_flag` parsing (`ctu::decode_inter_cu`), `RefPicList1`
@@ -252,19 +247,63 @@ impl HevcDecoder {
         // hierarchical-B GOPs and explicit weighted bi-prediction
         // (`weightb=1`) — see `docs/codec/vaco-codec-hevc.md`'s B-slice
         // section for the full measured sweep. The refusal is lifted.
-        if hdr.dependent {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: dependent slice segments are not supported",
+        if hdr.dependent || !hdr.first_slice_segment_in_pic {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: access unit does not begin with an independent slice segment",
             ));
         }
-        if !hdr.first_slice_segment_in_pic {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: multiple slice segments per picture are not supported",
+        let mut slice_starts: Vec<u32> = self.budget.alloc(slice_nals.len())?;
+        let Some(first_start) = slice_starts.first_mut() else {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: picture has no slice segments",
             ));
+        };
+        *first_start = hdr.slice_segment_address;
+        for (index, &ebsp) in slice_nals.iter().enumerate().skip(1) {
+            let segment_nal = HevcNalHeader::parse(ebsp)
+                .ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
+            self.rbsp.fill(ebsp, &mut self.budget)?;
+            let segment_rbsp = self.rbsp.as_slice();
+            let segment_pps_id = vaco_parse_hevc::slice::peek_pps_id(segment_rbsp).ok_or(
+                Error::InvalidData("vaco-codec-hevc: slice segment header truncated before pps_id"),
+            )?;
+            if segment_pps_id != pps_id {
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: slice segments with different PPS IDs are not supported",
+                ));
+            }
+            let mut segment_reader = vaco_bitstream::BitReader::new(segment_rbsp);
+            segment_reader.skip(16);
+            let segment_hdr = SliceHeader::parse_data(
+                &mut segment_reader,
+                segment_nal,
+                &sps,
+                &pps,
+                &mut self.budget,
+            )?;
+            segment_reader.check()?;
+            if segment_hdr.dependent {
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: dependent slice segments are not supported",
+                ));
+            }
+            if segment_hdr.first_slice_segment_in_pic {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: second first-slice segment in one access unit",
+                ));
+            }
+            if !matching_independent_slice_header(&hdr, &segment_hdr) {
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: independent slice segments with differing headers are not supported",
+                ));
+            }
+            let Some(start) = slice_starts.get_mut(index) else {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: slice segment count changed while parsing",
+                ));
+            };
+            *start = segment_hdr.slice_segment_address;
         }
-
-        reader.align();
-        let cabac_data = reader.remaining_bytes();
 
         let slice_qp = 26 + pps.init_qp_minus26 + hdr.qp_delta;
 
@@ -292,6 +331,33 @@ impl HevcDecoder {
             .unwrap_or(0)
             .div_ceil(ctb_size_u32)
             .max(1);
+        let total_ctbs = ctbs_x.saturating_mul(ctbs_y);
+        if hdr.slice_segment_address != 0 {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first slice segment does not start at CTB zero",
+            ));
+        }
+        for (index, &start) in slice_starts.iter().enumerate() {
+            let end = slice_starts
+                .get(index.saturating_add(1))
+                .copied()
+                .unwrap_or(total_ctbs);
+            if start >= end || end > total_ctbs {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: slice segment addresses are not strictly increasing CTB ranges",
+                ));
+            }
+        }
+        if slice_starts.len() > 1 && pps.entropy_coding_sync_enabled {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: multiple WPP slice segments are not supported",
+            ));
+        }
+        if slice_starts.len() > 1 && !hdr.loop_filter_across_slices_enabled {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: slice boundaries with loop filtering disabled are not supported",
+            ));
+        }
         // Stage 2b's "try `std::thread::scope`" resolution
         // (`docs/codec/hevc-wavefront-threading.md`): every one of these
         // five `*Shared` boards is now a plain local, owned by this same
@@ -511,10 +577,18 @@ impl HevcDecoder {
             // `decode_wpp_rows`'s own doc for why using `cabac_data`'s byte
             // positions directly under-counts every row boundary that a
             // `00 00 03` escape happens to precede.
+            self.rbsp.fill(first_ebsp, &mut self.budget)?;
+            let rbsp = self.rbsp.as_slice();
+            let mut reader = vaco_bitstream::BitReader::new(rbsp);
+            reader.skip(16);
+            let _ = SliceHeader::parse_data(&mut reader, header, &sps, &pps, &mut self.budget)?;
+            reader.check()?;
+            reader.align();
+            let cabac_data = reader.remaining_bytes();
             let header_rbsp_len = rbsp.len().saturating_sub(cabac_data.len());
             decode_wpp_rows(
                 &mut self.budget,
-                ebsp,
+                first_ebsp,
                 header_rbsp_len,
                 &hdr.entry_point_offsets,
                 &mut walk,
@@ -526,32 +600,69 @@ impl HevcDecoder {
                 hdr.cabac_init,
             )?;
         } else {
-            let mut cabac = CabacDecoder::new(cabac_data);
-            let mut ctx = new_context_bank(hdr.kind, hdr.cabac_init, qp_i8);
-            let total_ctbs = ctbs_x.saturating_mul(ctbs_y);
-            for addr in 0..total_ctbs {
-                let col = addr.checked_rem(ctbs_x).unwrap_or(0);
-                let row = addr.checked_div(ctbs_x).unwrap_or(0);
-                let row_us = usize::try_from(row).unwrap_or(0);
-                let col_us = usize::try_from(col).unwrap_or(0);
-                if col == 0 {
-                    walk.edges.begin_row(row_us)?;
-                    walk.cu_grid.begin_row(&mut self.budget, row_us)?;
-                    walk.sao_params.begin_row(&mut self.budget, row_us)?;
+            for (index, &ebsp) in slice_nals.iter().enumerate() {
+                let start_ctb = slice_starts.get(index).copied().ok_or(Error::InvalidData(
+                    "vaco-codec-hevc: slice segment address missing while decoding",
+                ))?;
+                let end_ctb = slice_starts
+                    .get(index.saturating_add(1))
+                    .copied()
+                    .unwrap_or(total_ctbs);
+                self.rbsp.fill(ebsp, &mut self.budget)?;
+                let rbsp = self.rbsp.as_slice();
+                let segment_nal = HevcNalHeader::parse(ebsp)
+                    .ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
+                let mut reader = vaco_bitstream::BitReader::new(rbsp);
+                reader.skip(16);
+                let parsed = SliceHeader::parse_data(
+                    &mut reader,
+                    segment_nal,
+                    &sps,
+                    &pps,
+                    &mut self.budget,
+                )?;
+                reader.check()?;
+                reader.align();
+                let cabac_data = reader.remaining_bytes();
+                walk.begin_slice_segment(start_ctb, end_ctb, slice_qp);
+                let mut cabac = CabacDecoder::new(cabac_data);
+                let mut ctx = new_context_bank(parsed.kind, parsed.cabac_init, qp_i8);
+                let mut terminated = false;
+                for addr in start_ctb..end_ctb {
+                    let col = addr.checked_rem(ctbs_x).unwrap_or(0);
+                    let row = addr.checked_div(ctbs_x).unwrap_or(0);
+                    let row_us = usize::try_from(row).unwrap_or(0);
+                    let col_us = usize::try_from(col).unwrap_or(0);
+                    if col == 0 {
+                        walk.edges.begin_row(row_us)?;
+                        walk.cu_grid.begin_row(&mut self.budget, row_us)?;
+                        walk.sao_params.begin_row(&mut self.budget, row_us)?;
+                    }
+                    walk.recon.begin_ctu(row_us, col_us)?;
+                    let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
+                    let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
+                    ctu::decode_ctu(&mut cabac, &mut ctx, &mut walk, cx, cy, addr)?;
+                    walk.recon.publish_ctu(row_us, col_us)?;
+                    let end = cabac.decode_terminate();
+                    if cabac.malformed() {
+                        return Err(Error::InvalidData(
+                            "vaco-codec-hevc: CABAC decode ran past the slice segment data",
+                        ));
+                    }
+                    if end != 0 {
+                        if addr.saturating_add(1) != end_ctb {
+                            return Err(Error::InvalidData(
+                                "vaco-codec-hevc: slice segment ended before its next address",
+                            ));
+                        }
+                        terminated = true;
+                        break;
+                    }
                 }
-                walk.recon.begin_ctu(row_us, col_us)?;
-                let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
-                let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
-                ctu::decode_ctu(&mut cabac, &mut ctx, &mut walk, cx, cy, addr)?;
-                walk.recon.publish_ctu(row_us, col_us)?;
-                let end = cabac.decode_terminate();
-                if cabac.malformed() {
+                if !terminated {
                     return Err(Error::InvalidData(
-                        "vaco-codec-hevc: CABAC decode ran past the slice segment data",
+                        "vaco-codec-hevc: slice segment did not terminate at its declared boundary",
                     ));
-                }
-                if end != 0 {
-                    break;
                 }
             }
         }
@@ -764,12 +875,27 @@ fn new_context_bank(kind: SliceKind, cabac_init: bool, qp: i8) -> ContextBank {
     }
 }
 
+/// Whether two independent segment headers can share this decoder's one
+/// picture-wide CTU context.  The segment position is deliberately ignored:
+/// §7.4.7.1 permits each independent segment to name its own raster CTB
+/// address. `cabac_init_flag` is likewise per-segment: the caller constructs
+/// each segment's fresh CABAC context bank from its own value. Every remaining
+/// field that affects the picture-wide CTU context must agree.
+fn matching_independent_slice_header(first: &SliceHeader, candidate: &SliceHeader) -> bool {
+    let mut normalized = candidate.clone();
+    normalized.first_slice_segment_in_pic = true;
+    normalized.dependent = false;
+    normalized.slice_segment_address = 0;
+    normalized.cabac_init = first.cabac_init;
+    first == &normalized
+}
+
 /// Split `cabac_data` into one byte range per CTU row, from
 /// `entry_point_offsets` (§7.4.7.1's `entry_point_offset_minus1[i] + 1`,
 /// already resolved to lengths by `vaco_parse_hevc::SliceHeader`).
 ///
-/// This crate's scope (checked by `check_scope`) never has tiles and always
-/// has exactly one slice segment per picture, so — unlike the general
+/// This crate refuses WPP pictures with more than one slice segment and never
+/// has tiles, so — unlike the general
 /// `numEntryPointOffsets` derivation, which also has to account for tile
 /// columns — one CTU row is exactly one substream here: `ctbs_y` rows need
 /// `ctbs_y - 1` entry points (the last row's length is whatever remains).

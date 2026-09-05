@@ -23,15 +23,14 @@
 //! The other simplification is real, not just cosmetic: HM's boundary
 //! availability (`isLeftAvail`/`isAboveRightAvail`/etc., from
 //! `deriveLoopFilterBoundaryAvailibility`) accounts for slice and tile
-//! boundaries as well as the picture edge. This crate supports exactly one
-//! slice segment and no tiles per picture (the crate doc), so "a
-//! neighbouring sample is available" and "that sample's coordinate is
-//! inside the picture" coincide exactly — the same reasoning
-//! `framebuf`'s own module doc already applies to intra-prediction
-//! neighbour availability. So every edge-offset computation below just
-//! bounds-checks both neighbour coordinates directly, which reproduces
-//! HM's own CTU-boundary-narrowing exactly within this crate's scope,
-//! without needing to re-derive it per CTU.
+//! boundaries as well as the picture edge. This crate refuses tiles and
+//! supports multiple independent segments only when loop filtering across
+//! their boundaries is enabled. That makes a neighbouring filtering sample
+//! available exactly when its coordinate is inside the picture, while the
+//! earlier `sao()` merge syntax receives separate current-segment gates.
+//! Every edge-offset computation below can therefore bounds-check both
+//! neighbour coordinates directly, without re-deriving availability per
+//! CTU.
 //!
 //! # Merge semantics
 //!
@@ -42,9 +41,8 @@
 //! makes the above-merge flag itself absent (`isLeftMerge` short-circuits
 //! it in HM, and the spec's own `sao()` syntax table does the same). Both
 //! are only present at all when the corresponding neighbour exists in this
-//! picture (`rx > 0` / `ry > 0`), which in this crate's one-slice/no-tile
-//! scope is the whole presence condition — no slice/tile-boundary check
-//! needed on top.
+//! picture (`rx > 0` / `ry > 0`) and belongs to the current segment. The
+//! caller supplies that latter condition; tiles are refused.
 
 use vaco_codec_cabac::CabacDecoder;
 use vaco_core::{Error, Result};
@@ -389,6 +387,10 @@ fn parse_component(
 /// against `prev` (every already-decoded CTU's [`CtuSao`], indexed by
 /// raster address — only `addr - 1` (left) and `addr - ctbs_x` (above) are
 /// ever read).
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "the two independent slice SAO flags and two current-segment availability inputs are syntax-level values"
+)]
 pub(crate) fn parse_ctu_sao(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
@@ -397,16 +399,18 @@ pub(crate) fn parse_ctu_sao(
     sao_luma: bool,
     sao_chroma: bool,
     prev: &SaoParamsGrid<'_>,
+    left_available: bool,
+    above_available: bool,
 ) -> Result<CtuSao> {
     let ctu_x = addr.checked_rem(ctbs_x).unwrap_or(0);
     let ctu_y = addr.checked_div(ctbs_x).unwrap_or(0);
 
-    let left_merge = if ctu_x > 0 {
+    let left_merge = if ctu_x > 0 && left_available {
         decode_merge_flag(cabac, ctx)?
     } else {
         false
     };
-    let above_merge = if ctu_y > 0 && !left_merge {
+    let above_merge = if ctu_y > 0 && !left_merge && above_available {
         decode_merge_flag(cabac, ctx)?
     } else {
         false
@@ -424,9 +428,9 @@ pub(crate) fn parse_ctu_sao(
         // in HM) — a slice can turn SAO off for chroma while keeping it on
         // for luma (`slice_sao_luma_flag`/`slice_sao_chroma_flag` are
         // independent bits), and a merge must not resurrect the disabled
-        // side from a neighbour decoded before the flags changed... though
-        // in this crate's single-slice scope the flags cannot change
-        // mid-picture; kept for fidelity to the spec's own rule regardless.
+        // side from a neighbour decoded before the flags changed. The
+        // supported multi-segment shape requires matching slice headers, but
+        // retaining this rule keeps the syntax's local invariant explicit.
         return Ok(CtuSao {
             y: if sao_luma { src.y } else { SaoMode::Off },
             cb: if sao_chroma { src.cb } else { SaoMode::Off },

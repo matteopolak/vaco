@@ -126,8 +126,11 @@
 //!   chroma formats other than 4:2:0, `separate_colour_plane_flag`,
 //!   tiles, chroma QP offset lists, every SPS/PPS range-extension and
 //!   screen-content-coding flag,
-//!   long-term reference pictures, dependent slice segments, and more than
-//!   one slice segment per picture. The SPS/PPS ones are refused at
+//!   long-term reference pictures and dependent slice segments. Multiple
+//!   independent segments are decoded when they share their slice context,
+//!   enable filtering across their boundaries, and do not use WPP; other
+//!   multi-segment combinations are refused by name rather than decoded with
+//!   the wrong neighbour availability. The SPS/PPS ones are refused at
 //!   `check_scope`; the rest the moment the bitstream actually uses the
 //!   feature, so a PPS that declares a flag it never exercises decodes fine.
 //!

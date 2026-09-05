@@ -54,7 +54,7 @@ residual-coding's context derivations, and intra prediction.
 | `intra_mode.rs` | MPM derivation (§8.4.2), `rem_intra_luma_pred_mode` resolution, chroma derived-mode (Table 8-2/8-3), mode-dependent scan-order selection |
 | `intra_pred.rs` | Reference-sample line construction/substitution/smoothing, planar/DC/angular prediction (hand-rolled — see the module doc for why `vaco-codec-dsp-intrapred`'s `angular_project` does not fit HEVC's negative-angle extension) |
 | `transform.rs` | Scaling-list resolution (§7.4.5), scaling/dequantisation (§8.6.3), the inverse-transform hand-off to `vaco-codec-dsp-idct::hevc` plus §8.6.5's caller-side `bdShift` |
-| `framebuf.rs` | `Picture`/`Plane` (`ready: Vec<bool>` substitutes for z-scan availability — see its module doc for why that is exact, not approximate, given this crate's single-slice-segment/no-tiles scope) |
+| `framebuf.rs` | `Picture`/`Plane` (`ready: Vec<bool>` plus the current segment's CTB-range gate substitutes for z-scan availability — see its module doc for why that is exact, not approximate) |
 
 ## How it works
 
@@ -62,12 +62,12 @@ residual-coding's context derivations, and intra prediction.
 and hands it to the embedded `HevcParser::push_access_unit`, which walks
 the packet's NAL units in whichever framing `set_extradata` resolved
 (Annex-B or `hvcC`-length-prefixed), ingesting VPS/SPS/PPS into its own
-`ParameterSets` and parsing the one primary-coded-picture slice header.
+`ParameterSets` and parsing the primary-coded-picture slice headers.
 The decoder then re-scans the same NAL units (via `vaco_format_nalu::units`,
-not a second parser) only to reach that slice's raw bits, which
+not a second parser) only to reach each segment's raw bits, which
 `push_access_unit` does not hand back; resolves its PPS/SPS via
-`parameter_sets().sps_for_pps`; runs `check_scope`; and walks every CTB in
-raster order via `ctu::decode_ctu` — `coding_quadtree` down to
+`parameter_sets().sps_for_pps`; runs `check_scope`; and walks each declared
+CTB range in raster order via `ctu::decode_ctu` — `coding_quadtree` down to
 `coding_unit`, which reads `part_mode`/`prev_intra_luma_pred_flag`/mpm-or-
 rem/`intra_chroma_pred_mode` and then `transform_tree` (recursive,
 carrying inherited `cbf_cb`/`cbf_cr` and the luma cbf context's
@@ -367,9 +367,24 @@ the lockfile's SHA-256-verified `NUT_A_ericsson_5.bit`: this decoder and
 `ffmpeg 9.0.1` both output 34 416x240 yuv420p frames (5,091,840 bytes), and
 every byte matches.
 
-Refused by name, not mis-decoded: more than one slice segment per picture
-(`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`). Before the scaling-list pass below,
-`slist-c` and `vpsspspps-a` also refused by name; both now decode exactly.
+### Independent slice-segment assembly
+
+An access unit may contain several independent slice segments. The decoder
+parses every header before reconstructing, validates strictly increasing CTB
+ranges, restarts CABAC and QP state at each range, and gates spatial syntax,
+intra references, motion candidates, and SAO merges to the current range.
+This is required because a previously reconstructed CTB in another slice is
+not an available neighbour under §6.4.1.
+
+The supported shape currently requires matching picture-wide decoding fields,
+`slice_loop_filter_across_slices_enabled_flag`, and no WPP. Each segment may
+select its own fresh CABAC initialisation; dependent segments, WPP
+multi-segment pictures, loop-filter-disabled boundaries, and segments whose
+headers require distinct picture-wide context remain named refusals. JCT-VC
+`HRD_A_Fujitsu_3` exercises four raster-contiguous,
+independent row segments per 416x240 picture; the vendored stream has 96
+yuv420p frames and the conformance package's published visible-byte MD5
+`f6d04dba2ef09bcadbea7b8ab5c8c917`.
 
 ### I_PCM and transquant-bypass decoding
 
@@ -688,11 +703,11 @@ already-SAO'd samples.
 
 The filtering process itself is written per-pixel rather than porting HM's
 row-buffer-reuse optimisation (see `sao.rs`'s own module doc for why that
-is a performance-only difference, not an algorithmic one) and leans on this
-crate's single-slice/no-tile scope for neighbour availability exactly the
-way `framebuf`'s own module doc already justifies for intra prediction: a
-neighbouring sample is unavailable if and only if it is outside the
-picture.
+is a performance-only difference, not an algorithmic one). Its supported
+multi-slice shape requires loop filtering across slice boundaries, so the
+picture-wide filtering pass may use a neighbour in another segment; the
+earlier CABAC `sao()` merge syntax is separately gated to the current
+segment.
 
 Verified the same way deblocking was: a real `libx265` stream with SAO left
 at its own (on) default (`wpp=0`, deblocking also at its default-on)

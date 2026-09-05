@@ -11,14 +11,11 @@
 //! # Availability, without re-deriving 6.4.1's z-scan addresses
 //!
 //! ITU-T H.265 §6.4.1 defines neighbour availability in terms of z-scan
-//! address order within one slice and one tile. This crate supports exactly
-//! one independent slice segment and no tiles per picture (see the crate
-//! doc), so "already decoded, in this picture" and "available per §6.4.1"
-//! coincide exactly. [`Plane::ready`] tracks the former directly — a bit set
-//! the instant a pixel's final reconstructed value is written — which is
-//! simpler than reconstructing z-scan addresses and cannot disagree with the
-//! process it is standing in for, because within that scope it is not an
-//! approximation of "already decoded", it *is* "already decoded".
+//! address order within one slice and one tile. [`Plane::ready`] tracks the
+//! former directly — a bit set the instant a pixel's final reconstructed
+//! value is written — while [`crate::ctu::Ctx`] supplies the current
+//! independent segment's CTB-range gate. Together they make an earlier
+//! segment's samples unavailable without reconstructing z-scan addresses.
 use vaco_core::{Error, Result};
 use vaco_limits::Budget;
 
