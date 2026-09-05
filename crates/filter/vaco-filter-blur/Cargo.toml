@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-blur"
-description = "T2 blur and sharpen video filters: boxblur, avgblur, gblur, unsharp, cas, dblur, guided, varblur, yaepblur (of the eleven planning/16-filters.md §4.2 assigns here; sab and smartblur are a follow-up, see the crate docs)."
+description = "T2 blur and sharpen video filters: boxblur, avgblur, gblur, unsharp, smartblur, cas, dblur, guided, varblur, yaepblur (of the eleven planning/16-filters.md §4.2 assigns here; sab remains a follow-up, see the crate docs)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

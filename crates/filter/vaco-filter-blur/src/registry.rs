@@ -3,20 +3,25 @@
 //!
 //! `planning/16-filters.md` §4.2 assigns eleven names to this crate:
 //! `unsharp, cas, avgblur, gblur, dblur, varblur, yaepblur, guided,
-//! boxblur, smartblur, sab`. Nine are implemented — every name except
-//! `sab` and `smartblur` — and registered below. Those two are left for a
-//! follow-up (see the crate's own top-level doc and
-//! `docs/filter/vaco-filter-blur.md`); nothing this project's
-//! dup-check/registry tooling can see would be satisfied by registering a
-//! name with no `create` function behind it, so they are simply absent
-//! rather than stubbed.
+//! boxblur, smartblur, sab`. Ten are implemented — every name except
+//! `sab` — and registered below. `sab` remains a follow-up rather than a
+//! name with no `create` function behind it.
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 /// The names this crate answers to, alphabetical (as `ffmpeg -filters`
 /// prints them).
 const NAMES: &[&str] = &[
-    "avgblur", "boxblur", "cas", "dblur", "gblur", "guided", "unsharp", "varblur", "yaepblur",
+    "avgblur",
+    "boxblur",
+    "cas",
+    "dblur",
+    "gblur",
+    "guided",
+    "smartblur",
+    "unsharp",
+    "varblur",
+    "yaepblur",
 ];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
@@ -36,6 +41,7 @@ impl FilterRegistry for BlurRegistry {
             "dblur" => crate::dblur::create(req),
             "gblur" => crate::gblur::create(req),
             "guided" => crate::guided::create(req),
+            "smartblur" => crate::smartblur::create(req),
             "unsharp" => crate::unsharp::create(req),
             "varblur" => crate::varblur::create(req),
             "yaepblur" => crate::yaepblur::create(req),

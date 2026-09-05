@@ -17,9 +17,8 @@
 //!
 //! `vaco-filter-blur` itself owns: `unsharp`, `cas`, `avgblur`, `gblur`,
 //! `dblur`, `varblur`, `yaepblur`, `guided`, `boxblur`, `smartblur`, `sab`
-//! (eleven names). Nine are implemented here; see [`registry`]'s module
-//! doc for which, and why `sab`/`smartblur` are a follow-up rather than a
-//! silent gap.
+//! (eleven names). Ten are implemented here; `sab` remains an explicit
+//! follow-up rather than a silent gap. See [`registry`]'s module doc.
 //!
 //! Built against `vaco-filter-core` (the `FrameFilter` trait, the `Simple`
 //! adapter), exactly as `vaco-filter-convolve` is.
@@ -51,17 +50,19 @@
 //! non-identity `radius=0` case — see [`varblur`]'s doc), `guided`
 //! (`guidance=off` only, published He et al. formula implemented directly
 //! but not probed against the reference — see [`guided`]'s doc). See
-//! `docs/filter/vaco-filter-blur.md` for the full accounting.
+//! `smartblur` (thresholded box-blend core, not the reference's exact
+//! weighting — see [`smartblur`]'s doc). See `docs/filter/vaco-filter-blur.md`
+//! for the full accounting.
 //!
 //! # Left for a follow-up (out of this brief's time budget)
 //!
 //! `sab` (shape-adaptive blur, a multi-pass per-pixel-adaptive-radius
-//! algorithm) and `smartblur` (edge-aware blur) — the two filters this
-//! crate's own roadmap row still does not implement. `guided=on` (a second,
+//! algorithm) — the one filter this crate's own roadmap row still does not
+//! implement. `guided=on` (a second,
 //! external guide stream) and `guided`'s fast/subsampled mode are also
 //! deliberately unimplemented — see [`guided`]'s doc — and rejected at
 //! creation rather than silently downgraded to the self-guided case. None
-//! of them block the nine filters that did land.
+//! of them block the ten filters that did land.
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -80,6 +81,7 @@ pub mod dblur;
 pub mod gblur;
 pub mod guided;
 pub mod registry;
+pub mod smartblur;
 pub mod unsharp;
 pub mod varblur;
 pub mod yaepblur;
