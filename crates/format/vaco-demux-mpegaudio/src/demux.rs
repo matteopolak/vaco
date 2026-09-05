@@ -684,12 +684,19 @@ mod vbr_tag_tests {
 
     #[test]
     fn vbri_magic_inside_a_layer1_frame_does_not_discard_audio() {
-        let (data, _) = two_frames_with_vbri(mpeg1_header(Layer::I));
+        let (data, len) = two_frames_with_vbri(mpeg1_header(Layer::I));
         let mut demux =
             MpegAudioDemuxer::open(Box::new(MemorySource::new(data)), &FormatOptions::default())
                 .expect("Layer I stream opens");
         let first = demux.read_packet().expect("first Layer I frame is emitted");
         assert_eq!(first.pos, Some(0));
+        assert_eq!(first.payload().len(), len);
+        let second = demux
+            .read_packet()
+            .expect("second Layer I frame is emitted");
+        assert_eq!(second.pos, Some(len as u64));
+        assert_eq!(second.payload().len(), len);
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 
     #[test]
@@ -700,6 +707,7 @@ mod vbr_tag_tests {
                 .expect("Layer III stream opens");
         let first = demux.read_packet().expect("first audio frame is emitted");
         assert_eq!(first.pos, Some(len as u64));
+        assert_eq!(first.payload().len(), len);
         assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 

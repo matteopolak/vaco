@@ -44,7 +44,12 @@ prints is the frame *after* it, at `pts=0`. This demuxer reproduces that:
 Layer III side info, or at [`vaco_format_mpegaudio::vbri::FRAME_OFFSET`]) and
 skips the whole frame before packetising. VBRI recognition is explicitly
 limited to Layer III: its four-byte magic can occur in Layer I/II payload, but
-must not turn a real non-MP3 audio frame into metadata.
+must not turn a real non-MP3 audio frame into metadata. The synthetic VBRI
+regressions count both Layer I/II payload frames and bytes, while the Layer III
+positive control confirms that exactly one same-sized audio frame follows the
+skipped metadata frame. No VBRI-writing encoder is available locally, so this
+boundary has no ffmpeg-generated fixture; its VBRI layout remains documented
+as a public-format transcription.
 
 ### Gapless trim is derived from the LAME tag plus a fixed decoder delay
 
