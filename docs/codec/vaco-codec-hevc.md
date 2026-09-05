@@ -993,8 +993,9 @@ minimum-size top-left leaf: its context-0 `part_mode` bin is 0, measured as
 `PART_NxN`; its first 4x4 PU then has a context-0
 `prev_intra_luma_pred_flag` of 1. Tile 1 refuses both leaf steps because its
 grandchild did not split. No remaining PU, MPM, prediction, transform, or
-reconstruction syntax is consumed. Finally it sends the same access unit to
-`HevcDecoder` and
+reconstruction syntax is consumed. For tile 0, the first bypass-coded
+`mpm_idx` prefix bin is measured as 1; its required second prefix bin remains
+unconsumed. Finally it sends the same access unit to `HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before the
 decoder consumes tile CABAC for reconstruction. This keeps the parser's

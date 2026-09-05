@@ -333,6 +333,27 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         )
         .expect("first tile NxN leaf carries a prev-intra flag");
     assert!(first_prev_intra_flag);
+    let first_mpm_prefix = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_leaf_mpm_idx_prefix(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile explicit-MPM leaf carries a prefix bin");
+    assert!(first_mpm_prefix);
+    let second_mpm_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_leaf_mpm_idx_prefix(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no explicit-MPM leaf");
+    assert!(matches!(
+        second_mpm_error,
+        Error::Unsupported("vaco-codec-hevc: first tile leaf has no explicit mpm_idx")
+    ));
     let second_prev_intra_error = tile_states
         .get_mut(1)
         .expect("second tile state exists")
