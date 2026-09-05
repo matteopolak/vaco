@@ -1845,6 +1845,7 @@ version = "0.1.0"
 dependencies = [
  "vaco-bitstream",
  "vaco-codec-core",
+ "vaco-codec-msac",
  "vaco-core",
  "vaco-frame",
  "vaco-limits",

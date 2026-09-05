@@ -108,7 +108,7 @@ impl<'a> BoolDecoder<'a> {
     pub fn read_literal(&mut self, num_bits: u32) -> u32 {
         let mut x = 0;
         for _ in 0..num_bits {
-            x = 2 * x + u32::from(self.read_bool(128));
+            x = (x << 1) | u32::from(self.read_bool(128));
         }
         x
     }

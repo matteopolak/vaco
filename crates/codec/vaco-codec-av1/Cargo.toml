@@ -13,6 +13,7 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-codec-msac = { path = "../../signal/vaco-codec-msac" }
 vaco-parse-av1 = { path = "../vaco-parse-av1" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-packet = { path = "../../model/vaco-packet" }

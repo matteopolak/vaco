@@ -119,7 +119,7 @@ impl<'a> BoolDecoder<'a> {
     pub fn read_magnitude_and_sign(&mut self, num_bits: u32) -> i32 {
         let magnitude = self.read_literal(num_bits).cast_signed();
         if magnitude != 0 && self.read_flag() {
-            -magnitude
+            magnitude.wrapping_neg()
         } else {
             magnitude
         }
@@ -224,6 +224,19 @@ mod tests {
             }
             self.output
         }
+    }
+
+    #[test]
+    fn thirty_two_bit_magnitude_does_not_overflow_when_negated() {
+        let mut enc = BoolEncoder::new();
+        enc.write_bool(128, true);
+        for _ in 0..31 {
+            enc.write_bool(128, false);
+        }
+        enc.write_bool(128, true);
+        let data = enc.finish();
+        let mut decoder = BoolDecoder::new(&data);
+        assert_eq!(decoder.read_magnitude_and_sign(32), i32::MIN);
     }
 
     #[test]

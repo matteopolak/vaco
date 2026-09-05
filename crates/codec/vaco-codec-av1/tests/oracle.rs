@@ -83,6 +83,59 @@ use vaco_core::Error;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
+#[test]
+fn shared_symbol_decoder_preserves_all_reference_planes_and_frame_counts() {
+    for (name, fixture, reference, width, height) in [
+        (
+            "flat128",
+            include_bytes!("fixtures/flat128.obu").as_slice(),
+            include_bytes!("fixtures/flat128_ref.yuv").as_slice(),
+            64usize,
+            64usize,
+        ),
+        (
+            "flat100",
+            include_bytes!("fixtures/flat100.obu").as_slice(),
+            include_bytes!("fixtures/flat100_ref.yuv").as_slice(),
+            16,
+            16,
+        ),
+        (
+            "checker",
+            include_bytes!("fixtures/checker.obu").as_slice(),
+            include_bytes!("fixtures/checker_ref.yuv").as_slice(),
+            64,
+            64,
+        ),
+    ] {
+        let mut decoder = Av1Decoder::new(Limits::default());
+        let mut budget = Budget::new(Limits::default());
+        let packet = Packet::from_slice(&mut budget, fixture).unwrap();
+        decoder.send_packet(Some(&packet)).unwrap();
+        decoder.send_packet(None).unwrap();
+        let frame = decoder.receive_frame().unwrap();
+        let mut actual = Vec::new();
+        for plane_index in 0..3 {
+            let plane_width = if plane_index == 0 { width } else { width / 2 };
+            let plane_height = if plane_index == 0 { height } else { height / 2 };
+            let plane = frame.plane(plane_index).unwrap();
+            for y in 0..plane_height {
+                actual.extend_from_slice(&plane.row(y).unwrap()[..plane_width]);
+            }
+        }
+        assert_eq!(actual.len(), width * height * 3 / 2, "{name}: byte count");
+        assert_eq!(actual.as_slice(), reference, "{name}: Y/U/V samples");
+        assert!(
+            matches!(decoder.receive_frame(), Err(Error::Eof)),
+            "{name}: frame count"
+        );
+        eprintln!(
+            "{name}: 1 frame, {} Y/U/V bytes, 0 differences",
+            actual.len()
+        );
+    }
+}
+
 fn decode_luma(fixture: &[u8], width: usize, height: usize) -> Result<Vec<u8>, Error> {
     let mut decoder = Av1Decoder::new(Limits::default());
     let mut budget = Budget::new(Limits::default());

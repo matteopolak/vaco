@@ -1,6 +1,6 @@
 [package]
 name = "vaco-codec-msac"
-description = "Boolean entropy decoders shared by VP8 and VP9 (D-04)."
+description = "AV1 multi-symbol and VP8/VP9 boolean entropy engines."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

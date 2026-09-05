@@ -15,12 +15,14 @@ out of scope — later work, other crates.
 Builds on `vaco-parse-av1` (OBU framing, sequence header, `av1C`, the
 partial frame header stop point) per the D14 layering split: that crate
 owns everything the *format* layer needs (container-level identification),
-this crate owns everything the *decode* process needs beyond that. It
-registers a `Decoder` for codec id `av1` via `AV1_DECODER`.
+this crate owns everything the *decode* process needs beyond that. It exports
+`Av1Decoder` and the `AV1_DECODER` descriptor for codec id `av1`. Its registry
+fragment remains disabled while the reconstruction gaps below are unresolved;
+direct decoder callers and tests use the shared symbol engine.
 
 | Module | Contents |
 |---|---|
-| `symbol.rs` | `SymbolDecoder` (§8.2's range coder: `read_symbol`/`read_bool`/`read_literal`/`exit_symbol`, CDF adaptation) |
+| `symbol.rs` | Compatibility re-export of `vaco-codec-msac::av1::SymbolDecoder`; the shared crate owns §8.2's range arithmetic and CDF adaptation |
 | `cdf.rs` | `TileCdf` — one fresh copy of every default CDF array (§9.4) this crate's syntax-element set reads, built once per tile; `qctx()`'s base_q_idx bucketing for the four coefficient-table families |
 | `tables.rs` + `tables/{default_cdf,scan,conversion,quant}.rs` | mechanically-extracted spec tables (default CDFs, scan orders, size/context conversion tables, quantizer lookups) |
 | `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — `uncompressed_header()`'s intra path past `vaco-parse-av1`'s stop point: tile info, quantization, segmentation, delta-q/lf, loop filter/CDEF/restoration params (parsed for bit alignment; not applied), tx mode, film grain params (parsed; not applied) |
@@ -152,6 +154,7 @@ all allocation (picture planes, per-tile context arrays) through
 |---|---|
 | `vaco-parse-av1` | OBU framing, sequence header, `av1C`, partial frame header (per D14, this crate must not duplicate any of it) |
 | `vaco-codec-core` | the `Decoder` trait, `DecoderDesc` registration, the `Machine<Frame>` send/receive state machine |
+| `vaco-codec-msac` | shared AV1 symbol decoder and CDF adaptation |
 | `vaco-frame` / `vaco-pixfmt` | output frame and pixel-format types |
 | `vaco-packet` | input compressed packets |
 | `vaco-limits` | allocation budgets for header-derived sizes |

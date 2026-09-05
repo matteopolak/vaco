@@ -1,4 +1,4 @@
-//! `vaco-codec-msac`: both boolean-entropy engines (VP8's and VP9's) against
+//! `vaco-codec-msac`: AV1 symbols and VP8/VP9 boolean engines against
 //! arbitrary bytes and an arbitrary script of reads.
 //!
 //! Neither engine returns `Result` from a per-bool read — an under-length
@@ -33,7 +33,7 @@
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use vaco_codec_msac::{Vp8BoolDecoder, Vp9BoolDecoder};
+use vaco_codec_msac::{Av1SymbolDecoder, Vp8BoolDecoder, Vp9BoolDecoder};
 
 #[derive(Arbitrary, Debug, Clone, Copy)]
 enum Op {
@@ -60,7 +60,7 @@ fn run_vp8(data: &[u8], script: &[Op]) -> Vec<i64> {
     for op in script.iter().take(4096) {
         match *op {
             Op::Bool(p) => out.push(i64::from(dec.read_bool(p))),
-            Op::Literal(n) => out.push(i64::from(dec.read_literal(u32::from(n) % 33))),
+            Op::Literal(n) => out.push(i64::from(dec.read_literal(u32::from(n) % 66))),
             Op::Tree(p) => {
                 let probs = [p; 4];
                 out.push(i64::from(dec.read_tree(&KF_YMODE_TREE, &probs)));
@@ -78,7 +78,7 @@ fn run_vp9(data: &[u8], script: &[Op]) -> Vec<i64> {
     for op in script.iter().take(4096) {
         match *op {
             Op::Bool(p) => out.push(i64::from(dec.read_bool(p))),
-            Op::Literal(n) => out.push(i64::from(dec.read_literal(u32::from(n) % 33))),
+            Op::Literal(n) => out.push(i64::from(dec.read_literal(u32::from(n) % 66))),
             Op::Tree(p) => {
                 let probs = [p; 4];
                 out.push(i64::from(dec.read_tree(&KF_YMODE_TREE, &probs)));
@@ -92,8 +92,45 @@ fn run_vp9(data: &[u8], script: &[Op]) -> Vec<i64> {
     out
 }
 
+fn run_av1(data: &[u8], script: &[Op]) -> Vec<i64> {
+    let n = u32::from(data.first().copied().unwrap_or(0) % 15) + 2;
+    let mut cdf: Vec<u16> = (1..=n)
+        .map(|i| u16::try_from(i * 32768 / n).unwrap_or(0))
+        .chain([0])
+        .collect();
+    let mut dec = Av1SymbolDecoder::new(data, false);
+    let mut out = Vec::new();
+    let mut last_overrun = dec.overrun();
+    for op in script.iter().take(4096) {
+        let value = match *op {
+            Op::Bool(_) | Op::Tree(_) => {
+                let value = dec.read_symbol(&mut cdf);
+                assert!(value < n);
+                assert!(cdf.iter().take(n as usize).is_sorted());
+                value
+            }
+            Op::Literal(bits) => dec.read_literal(u32::from(bits) % 66),
+        };
+        out.push(i64::from(value));
+        let now = dec.overrun();
+        assert!(
+            now || !last_overrun,
+            "av1 overrun cleared itself back to false"
+        );
+        last_overrun = now;
+    }
+    dec.exit_symbol();
+    out.push(i64::from(dec.overrun()));
+    out.extend(cdf.into_iter().map(i64::from));
+    out
+}
+
 fuzz_target!(|input: Input| {
     let script: Vec<Op> = input.script;
+
+    let av1_a = run_av1(&input.data, &script);
+    let av1_b = run_av1(&input.data, &script);
+    assert_eq!(av1_a, av1_b, "AV1 symbol decoder is not deterministic");
 
     let vp8_a = run_vp8(&input.data, &script);
     let vp8_b = run_vp8(&input.data, &script);

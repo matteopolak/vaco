@@ -1,0 +1,6 @@
+[[source]]
+id = "libaom-3.14.1-msac-oracle"
+kind = "blackbox"
+title = "libaom 3.14.1 installed static library: od_ec_decode_cdf_q15 fixed-CDF symbol traces. ABI and inverse-CDF convention checked against BSD-2-Clause aom_dsp/entdec.h, entcode.h, and prob.h at tag v3.14.1; decoder implementation source was not read."
+acquired = "2026-09-04"
+where = "https://aomedia.googlesource.com/aom/+/refs/tags/v3.14.1/aom_dsp/entdec.h"

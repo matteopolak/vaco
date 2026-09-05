@@ -2580,6 +2580,7 @@ dependencies = [
  "proptest",
  "vaco-bitstream",
  "vaco-codec-core",
+ "vaco-codec-msac",
  "vaco-core",
  "vaco-frame",
  "vaco-limits",
