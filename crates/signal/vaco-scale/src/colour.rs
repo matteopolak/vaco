@@ -234,7 +234,7 @@ impl Lut3D {
             base[1].saturating_add(1),
             base[2].saturating_add(1),
         );
-        tetrahedral(c000, c100, c010, c001, c110, c101, c011, c111, f)
+        tetrahedral_interpolate([c000, c100, c010, c001, c110, c101, c011, c111], f)
     }
 
     fn at(&self, r: usize, g: usize, b: usize) -> [f64; 3] {
@@ -733,17 +733,16 @@ fn gamut_map(rgb: [f64; 3], intent: RenderingIntent) -> [f64; 3] {
     clippy::too_many_arguments,
     reason = "the eight cube corners and three fractional coordinates are the tetrahedral definition"
 )]
-fn tetrahedral(
-    c000: [f64; 3],
-    c100: [f64; 3],
-    c010: [f64; 3],
-    c001: [f64; 3],
-    c110: [f64; 3],
-    c101: [f64; 3],
-    c011: [f64; 3],
-    c111: [f64; 3],
-    f: [f64; 3],
-) -> [f64; 3] {
+/// Interpolate the enclosing ordered tetrahedron of a unit RGB cube.
+///
+/// `corners` are `[000, 100, 010, 001, 110, 101, 011, 111]` and
+/// `fractions` are the point's local coordinates in that cube.  This small
+/// primitive is public so externally supplied LUT filters use the same
+/// simplex convention as colour-management plans, including lattices larger
+/// than the plan-time 65-cells-per-edge bound.
+#[must_use]
+pub fn tetrahedral_interpolate(corners: [[f64; 3]; 8], f: [f64; 3]) -> [f64; 3] {
+    let [c000, c100, c010, c001, c110, c101, c011, c111] = corners;
     let (a, b, c) = (f[0], f[1], f[2]);
     if a >= b {
         if b >= c {

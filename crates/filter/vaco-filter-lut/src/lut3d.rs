@@ -23,26 +23,11 @@
 //! non-default domain is not applied (documented gap — every `.cube` this
 //! crate has tested uses the default `0..1` domain).
 //!
-//! # Interpolation: trilinear and nearest only, and `tetrahedral` — the
-//! reference's own default — is now a hard error
+//! # Interpolation: nearest, trilinear, and tetrahedral
 //!
-//! `tetrahedral`, `pyramid` and `prism` need a different geometric
-//! decomposition of the enclosing cube than trilinear and are out of this
-//! crate's time budget to implement. This used to fall back to trilinear
-//! rather than erroring, reasoned as "the visual difference is usually
-//! small and a LUT this crate cannot open is a worse failure than one it
-//! approximates" — which means **every unconfigured `lut3d` call silently
-//! ran the wrong interpolation**, since `tetrahedral` is the reference's
-//! own default. Verified concretely: the same 2-level `.cube` and the
-//! same `0x808080` input pixel give `0x69` under `trilinear` and `0x26`
-//! under `tetrahedral` on real `ffmpeg 8.1` — a large, real divergence,
-//! not a rounding difference. A silent substitution that lands on every
-//! default invocation is the worse failure, not the smaller one: `create`
-//! now rejects `tetrahedral`/`pyramid`/`prism` by name instead. This is a
-//! real, deliberate behaviour change — a bare `lut3d=file=…` now errors
-//! where it used to silently run trilinear — not a refinement that
-//! preserves the old default's usability; pass `interp=trilinear` (or
-//! `nearest`) explicitly to get a working filter today.
+//! `tetrahedral` is the reference default and uses the same ordered-simplex
+//! primitive as `vaco-scale`; it is intentionally distinct from trilinear.
+//! `pyramid` and `prism` remain named errors rather than silent substitutions.
 //!
 //! # Format restriction: RGB only
 //!
@@ -92,6 +77,7 @@ use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_filter_core::{FilterContext, FilterDesc, FilterFlags, Pad};
 use vaco_frame::{Frame, FrameData};
 use vaco_opts::OptionsExt as _;
+use vaco_scale::colour::tetrahedral_interpolate;
 
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
@@ -247,29 +233,62 @@ impl Cube3d {
         let round = |v: f64| (v.clamp(0.0, 1.0) * scale).round() as usize;
         self.at(round(r), round(g), round(b))
     }
+
+    /// Tetrahedral interpolation in the same red-fastest lattice convention
+    /// as [`crate::lut3d`] files and `vaco_scale::Lut3D`.
+    #[must_use]
+    pub(crate) fn sample_tetrahedral(&self, r: f64, g: f64, b: f64) -> [f64; 3] {
+        let scale = (self.size.saturating_sub(1)) as f64;
+        let p = [r, g, b].map(|value| value.clamp(0.0, 1.0) * scale);
+        let base = p.map(|value| value.floor() as usize);
+        let fractions = core::array::from_fn(|index| p[index] - base[index] as f64);
+        tetrahedral_interpolate(
+            [
+                self.at(base[0], base[1], base[2]),
+                self.at(base[0].saturating_add(1), base[1], base[2]),
+                self.at(base[0], base[1].saturating_add(1), base[2]),
+                self.at(base[0], base[1], base[2].saturating_add(1)),
+                self.at(
+                    base[0].saturating_add(1),
+                    base[1].saturating_add(1),
+                    base[2],
+                ),
+                self.at(
+                    base[0].saturating_add(1),
+                    base[1],
+                    base[2].saturating_add(1),
+                ),
+                self.at(
+                    base[0],
+                    base[1].saturating_add(1),
+                    base[2].saturating_add(1),
+                ),
+                self.at(
+                    base[0].saturating_add(1),
+                    base[1].saturating_add(1),
+                    base[2].saturating_add(1),
+                ),
+            ],
+            fractions,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Interp {
     Nearest,
     Trilinear,
+    Tetrahedral,
 }
 
 impl Interp {
     /// # Errors
-    /// A named error for `tetrahedral`/`pyramid`/`prism` (`2..=4`) — see
-    /// the module doc for why these are rejected rather than silently
-    /// run as `trilinear`.
+    /// A named error for the unsupported `pyramid`/`prism` modes.
     fn from_opt(v: i32) -> std::result::Result<Self, String> {
         match v {
             0 => Ok(Self::Nearest),
             1 => Ok(Self::Trilinear),
-            2 => Err(
-                "lut3d: interp=tetrahedral is not implemented (this is the reference's own \
-                 default; pass interp=trilinear or interp=nearest explicitly — see this \
-                 module's doc)"
-                    .to_owned(),
-            ),
+            2 => Ok(Self::Tetrahedral),
             3 => Err("lut3d: interp=pyramid is not implemented — see this module's doc".to_owned()),
             4 => Err("lut3d: interp=prism is not implemented — see this module's doc".to_owned()),
             other => Err(format!("lut3d: interp={other} is out of range (0..=4)")),
@@ -353,6 +372,7 @@ impl Filter {
                 let out = match self.interp {
                     Interp::Nearest => self.cube.sample_nearest(r, g, b),
                     Interp::Trilinear => self.cube.sample_trilinear(r, g, b),
+                    Interp::Tetrahedral => self.cube.sample_tetrahedral(r, g, b),
                 };
                 #[allow(
                     clippy::cast_possible_truncation,
@@ -521,13 +541,10 @@ mod tests {
         }
     }
 
-    /// `tetrahedral` (the reference's own default), `pyramid` and `prism`
-    /// used to silently run `trilinear` -- accepted, wrong, no error, on
-    /// every unconfigured call since `tetrahedral` is the default.
-    /// `Interp::from_opt` now rejects each by name instead.
+    /// Unsupported modes are named errors rather than substitutions.
     #[test]
     fn unimplemented_interp_values_are_a_named_error_not_a_silent_substitution() {
-        for v in [2, 3, 4] {
+        for v in [3, 4] {
             let err = Interp::from_opt(v).unwrap_err();
             assert!(
                 err.contains("lut3d") && err.contains("not implemented"),
@@ -540,5 +557,20 @@ mod tests {
     fn implemented_interp_values_still_create() {
         assert_eq!(Interp::from_opt(0), Ok(Interp::Nearest));
         assert_eq!(Interp::from_opt(1), Ok(Interp::Trilinear));
+        assert_eq!(Interp::from_opt(2), Ok(Interp::Tetrahedral));
+    }
+
+    #[test]
+    fn tetrahedral_uses_the_ordered_simplex_not_trilinear_blending() {
+        let cube = Cube3d::parse(
+            "LUT_3D_SIZE 2\n\
+             0 0 0\n1 0 0\n0 1 0\n1 1 0\n\
+             0 0 1\n1 0 1\n0 1 1\n0.2 0.4 0.6\n",
+        )
+        .unwrap();
+        let tetrahedral = cube.sample_tetrahedral(0.75, 0.5, 0.25);
+        let trilinear = cube.sample_trilinear(0.75, 0.5, 0.25);
+        assert_eq!(tetrahedral, [0.55, 0.35, 0.15]);
+        assert_ne!(tetrahedral, trilinear);
     }
 }

@@ -20,15 +20,9 @@
 //!
 //! # `interp`, `clut`
 //!
-//! Same as [`crate::lut3d`] — nearest and trilinear only — and the same
-//! fix applies: `interp=tetrahedral` (this crate's own declared default,
-//! matching the reference's), `pyramid` and `prism` used to silently run
-//! trilinear on every unconfigured call; `create` now rejects them by
-//! name instead (see `lut3d.rs`'s doc for the measured evidence this is a
-//! real, large divergence, not a rounding difference). Concretely: a bare
-//! `haldclut` now errors where it used to silently run trilinear — pass
-//! `interp=trilinear` (or `nearest`) explicitly to get a working filter
-//! today. `clut=first` (process the CLUT only once) has the same shape:
+//! Same as [`crate::lut3d`] — nearest, trilinear, and tetrahedral. The
+//! latter is the default and shares `vaco-scale`'s ordered-simplex primitive.
+//! `pyramid` and `prism` remain named errors. `clut=first` (process the CLUT only once) has the same shape:
 //! parsed fine, but this filter always re-decodes the second input's
 //! current frame every event with no caching and no error, i.e. silently
 //! always behaves like `clut=all`. `create` now rejects `clut=first` too,
@@ -182,6 +176,7 @@ pub(crate) fn decode_hald(frame: &Frame) -> std::result::Result<Cube3d, String> 
 enum Interp {
     Nearest,
     Trilinear,
+    Tetrahedral,
 }
 
 #[derive(Debug)]
@@ -255,6 +250,7 @@ impl FrameSyncFilter for HaldClut {
                 let out_v = match self.interp {
                     Interp::Nearest => cube.sample_nearest(r, g, b),
                     Interp::Trilinear => cube.sample_trilinear(r, g, b),
+                    Interp::Tetrahedral => cube.sample_tetrahedral(r, g, b),
                 };
                 #[allow(
                     clippy::cast_possible_truncation,
@@ -300,19 +296,12 @@ impl FrameSyncFilter for HaldClut {
 }
 
 /// # Errors
-/// A named error for `tetrahedral`/`pyramid`/`prism` (`2..=4`) — see the
-/// module doc for why these are rejected rather than silently run as
-/// `trilinear`.
+/// A named error for the unsupported `pyramid`/`prism` modes.
 fn interp_from_opt(v: i32) -> std::result::Result<Interp, String> {
     match v {
         0 => Ok(Interp::Nearest),
         1 => Ok(Interp::Trilinear),
-        2 => Err(
-            "haldclut: interp=tetrahedral is not implemented (this is the reference's own \
-             default; pass interp=trilinear or interp=nearest explicitly — see this module's \
-             doc)"
-                .to_owned(),
-        ),
+        2 => Ok(Interp::Tetrahedral),
         3 => Err("haldclut: interp=pyramid is not implemented — see this module's doc".to_owned()),
         4 => Err("haldclut: interp=prism is not implemented — see this module's doc".to_owned()),
         other => Err(format!("haldclut: interp={other} is out of range (0..=4)")),
@@ -453,12 +442,10 @@ mod tests {
         }
     }
 
-    /// Same shape as `lut3d`'s equivalent test: `tetrahedral` (the
-    /// reference's own default), `pyramid` and `prism` used to silently
-    /// run `trilinear`. `interp_from_opt` now rejects each by name.
+    /// Unsupported modes are named errors rather than substitutions.
     #[test]
     fn unimplemented_interp_values_are_a_named_error_not_a_silent_substitution() {
-        for v in [2, 3, 4] {
+        for v in [3, 4] {
             let err = interp_from_opt(v).unwrap_err();
             assert!(
                 err.contains("haldclut") && err.contains("not implemented"),
@@ -471,6 +458,7 @@ mod tests {
     fn implemented_interp_values_still_create() {
         assert_eq!(interp_from_opt(0), Ok(Interp::Nearest));
         assert_eq!(interp_from_opt(1), Ok(Interp::Trilinear));
+        assert_eq!(interp_from_opt(2), Ok(Interp::Tetrahedral));
     }
 
     /// `clut=first` used to parse fine and silently behave like `clut=all`

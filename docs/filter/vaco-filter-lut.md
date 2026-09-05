@@ -13,10 +13,9 @@ carried over from a prior mis-scoped crate (GitHub issue #476's
 
 **Left for follow-up, stated honestly**: `.3dl`/`.dat`/`.m3d` file parsing
 for `lut3d`'s `file` option;
-`cubic`/`cosine`/`spline` interpolation for `lut1d` and
-`tetrahedral`/`pyramid`/`prism` for `lut3d`/`haldclut` (each is now a
-named "not implemented" error rather than a silent fall back to linear/
-trilinear — see "Interpolation" below); non-default
+`cubic`/`cosine`/`spline` interpolation for `lut1d` and `pyramid`/`prism`
+for `lut3d`/`haldclut` (each is a named "not implemented" error rather than
+a silent substitution — see "Interpolation" below); non-default
 `DOMAIN_MIN`/`DOMAIN_MAX`; `haldclut`'s `clut=first` (now also a named
 error rather than silently behaving like `clut=all`).
 
@@ -28,7 +27,7 @@ file (3D and 1D respectively), `haldclut` decodes one from a second video
 input carrying a Hald CLUT image, and `haldclutsrc` generates that Hald
 CLUT image in the first place. `lut3d`/`haldclut` share
 [`lut3d::Cube3d`](../../crates/filter/vaco-filter-lut/src/lut3d.rs), the
-trilinear/nearest sampler; `lut1d` has its own per-channel-independent 1D
+nearest/trilinear/tetrahedral sampler; `lut1d` has its own per-channel-independent 1D
 analogue in `lut1d.rs`.
 
 ## How it works
@@ -53,7 +52,7 @@ output matching the file's own table (see `lut1d.rs`'s doc).
 ### `lut1d`/`lut3d`/`haldclut` share one channel model, apply it differently
 
 `lut3d`/`haldclut` treat `(R, G, B)` as one point in a 3D space and
-trilinear/nearest-interpolate a single joint sample. `lut1d` is simpler:
+nearest/trilinear/tetrahedral-interpolate a single joint sample. `lut1d` is simpler:
 each output channel reads **only its own column** of the table — the red
 sample never sees the table's G/B columns — confirmed with a 2-row table
 `[(0,0,0), (0.5,0.5,0.5)]` applied to `rgba` `0x80808080`: alpha passed
@@ -87,24 +86,17 @@ and each crate's `truncates_rather_than_rounds_*` regression test (each
 one falsified by temporarily restoring `.round()` and confirming the test
 fails before restoring the fix).
 
-### Interpolation: nearest and linear/trilinear only
+### Interpolation: tetrahedral is the default 3D mode
 
-`lut1d`'s `cubic`/`cosine`/`spline` and `lut3d`/`haldclut`'s
-`tetrahedral`/`pyramid`/`prism` need more surrounding points than a
-two-point (1D) or eight-corner (3D) neighbourhood and were out of this
-crate's time budget. These used to silently fall back to linear/
-trilinear with no error — accepted, wrong, undetectable short of a
-differential comparison. Verified concretely (real `ffmpeg 8.1`): the
-same 2-level `.cube` and the same `0x808080` pixel give `0x69` under
-`trilinear` and `0x26` under `tetrahedral` — a large, real divergence,
-not a rounding difference. Each unimplemented value is now a named
-"not implemented" error instead. `lut1d`'s default is `linear`
-(implemented), so only an explicit non-default request is affected;
-`lut3d`/`haldclut`'s default is `tetrahedral`, so **a bare
-`lut3d=file=…`/`haldclut` now errors by default** — pass
-`interp=trilinear` (or `nearest`) explicitly to get a working filter,
-which is a real, deliberate behaviour change from "wrong but ran" to
-"correct but requires an explicit option," not a refinement.
+`lut3d`/`haldclut` use tetrahedral interpolation by default. The cube is
+split by the ordering of its three fractional coordinates; the selected
+simplex always contains the black-to-white diagonal. The primitive is owned
+by `vaco-scale`, so externally supplied cubes and colour-management plans
+cannot drift to different tetrahedral conventions. A real FFmpeg 9.0.1
+probe across all six orders is exact to 0 LSB. `pyramid` and `prism` remain
+named errors rather than silently falling back. `lut1d`'s default remains
+the independently implemented linear mode; its `cubic`/`cosine`/`spline`
+options are likewise named errors.
 
 ### Format restriction
 
@@ -133,10 +125,9 @@ warns about), `.3dl`/`.dat`/`.m3d` parsing is left unimplemented. See
   so `haldclut.rs` needs no changes. Start by finding a real reference
   `.3dl` file (not a hand-guessed one) to probe against — the two guesses
   this pass tried both failed outright.
-- Tetrahedral/pyramid/prism interpolation: add variants to the `Interp`
-  enums in `lut3d.rs`/`haldclut.rs` and a `Cube3d::sample_*` method
-  alongside `sample_trilinear`/`sample_nearest`. Same shape for `lut1d`'s
-  `cubic`/`cosine`/`spline`.
+- Pyramid/prism interpolation: add variants to the `Interp` enums and a
+  `Cube3d::sample_*` method. Keep tetrahedral sampling routed through
+  `vaco-scale`; `lut1d` still needs its own cubic/cosine/spline modes.
 - A new colour/LUT filter is `vaco-filter-color`'s row, not this crate's —
   this crate's row is closed at four filters.
 
@@ -150,4 +141,4 @@ configuration surface.
 
 `vaco-core`, `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
 `vaco-filter-graph`, `vaco-filter-framesync` (for `haldclut`'s two
-inputs).
+inputs), and `vaco-scale::colour` (the shared tetrahedral primitive).
