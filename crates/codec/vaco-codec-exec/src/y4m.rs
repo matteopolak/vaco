@@ -78,7 +78,7 @@ impl Y4mGeometry {
         // rate-control heuristics `x264`/`x265` apply, not the geometry or
         // pixel content, so this is a quality knob, not a correctness one.
         let tb = frame.time_base;
-        let ticks = frame.duration.0;
+        let ticks = frame.duration_ticks();
         let fps = if ticks > 0 && tb.num > 0 {
             i64::from(tb.den)
                 .checked_div(ticks.saturating_mul(i64::from(tb.num)))

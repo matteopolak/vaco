@@ -379,7 +379,9 @@ impl Demuxer for DvDemuxer {
     fn duration(&self) -> Option<Duration> {
         let n = self.total_frames?;
         Some(Duration::from_micros(
-            self.frame_duration().0.saturating_mul(n.cast_signed()),
+            self.frame_duration()
+                .as_micros()
+                .saturating_mul(n.cast_signed()),
         ))
     }
 
@@ -458,16 +460,17 @@ mod codec_identity_tests {
             .expect("open NTSC frame");
 
         assert_eq!(demux.streams()[0].frame_count, Some(1));
+        assert_eq!(demux.duration().map(Duration::as_ratio), Some((1001, 30_000)));
         assert_eq!(
             demux
                 .duration_exact()
                 .map(vaco_core::ExactDuration::as_ratio),
             Some((1_001, 30_000))
         );
-        assert_eq!(
-            demux.read_packet().expect("one video packet").pts.ticks(),
-            Some(0)
-        );
+        let packet = demux.read_packet().expect("one video packet");
+        assert_eq!(packet.pts.ticks(), Some(0));
+        assert_eq!(packet.duration.as_ratio(), (1001, 30_000));
+        assert_eq!(packet.payload(), frame(false));
         assert!(matches!(demux.read_packet(), Err(vaco_core::Error::Eof)));
     }
 }

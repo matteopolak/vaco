@@ -29,7 +29,7 @@
 //! not yet been exercised by a case.
 
 use vaco_color::ColorInfo;
-use vaco_core::{Duration, MediaType, Rational, Timestamp};
+use vaco_core::{MediaType, Rational, Timestamp};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_filter_core::{Graph, LinkFormat};
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
@@ -299,7 +299,7 @@ pub fn run(args: &FilterArgs<'_>) -> Result<Observation, String> {
         fill_planes(&mut frame, fmt, width, height, &raw).map_err(|e| format!("pad {pad}: {e}"))?;
         frame.pts = Timestamp::new(0);
         frame.time_base = time_base;
-        frame.duration = Duration(1);
+        frame.set_duration_ticks(1);
         frames.push(frame);
 
         let source_format = LinkFormat::Video {

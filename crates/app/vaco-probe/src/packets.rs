@@ -169,7 +169,7 @@ pub fn read<W: Write>(
 fn micros(pkt: &Packet, stream: Option<&Stream>) -> Option<i64> {
     let tb: TimeBase = stream.map_or(TimeBase::MICROSECONDS, |s| s.time_base);
     let ts = if pkt.pts.is_some() { pkt.pts } else { pkt.dts };
-    ts.to_duration(tb).map(|d| d.0)
+    ts.to_duration(tb).map(vaco_core::Duration::as_micros)
 }
 
 fn stream_of(streams: &[Stream], index: u32) -> Option<&Stream> {
@@ -218,7 +218,7 @@ fn seek(
         })
         .or_else(|| streams.first())
         .ok_or(Error::NotSeekable)?;
-    let ts = vaco_core::Duration(micros)
+    let ts = vaco_core::Duration::from_micros(micros)
         .to_ticks(reference.time_base)
         .ok_or(Error::NotSeekable)?;
     demuxer.seek(
@@ -296,7 +296,7 @@ mod tests {
         p.stream_index = index;
         p.pts = Timestamp::new(pts);
         p.dts = Timestamp::new(pts);
-        p.duration = Duration(1000);
+        p.duration = Duration::from_micros(1000);
         p.flags = PacketFlags::KEY;
         p
     }
