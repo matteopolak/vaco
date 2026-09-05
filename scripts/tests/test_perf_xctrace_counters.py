@@ -36,6 +36,13 @@ PROCESS_COUNTER_EXPORT = """<?xml version="1.0" encoding="UTF-8"?>
 </trace-query-result>
 """
 
+XCTRACE_BOTTLENECK_EXPORT = """<?xml version="1.0"?>
+<trace-query-result><node><row>
+  <process id="3" fmt="yes (38060)"><pid id="4" fmt="38060">38060</pid></process>
+  <uint64-array id="6" fmt="0x83c 0x52a 0x1383 0x61c">2108 1322 4995 1564</uint64-array>
+</row></node></trace-query-result>
+"""
+
 
 class XcTraceParserTests(unittest.TestCase):
     def test_extracts_named_counters_for_the_launched_process(self):
@@ -68,6 +75,10 @@ class XcTraceParserTests(unittest.TestCase):
     def test_rejects_an_export_without_the_requested_process(self):
         with self.assertRaisesRegex(ValueError, "candidate"):
             MODULE.parse_process_counters(PROCESS_COUNTER_EXPORT, "candidate")
+
+    def test_real_bottleneck_process_format_reaches_instruction_contract(self):
+        with self.assertRaisesRegex(ValueError, "instructions"):
+            MODULE.parse_process_counters(XCTRACE_BOTTLENECK_EXPORT, "yes")
 
 
 class HarnessSummaryTests(unittest.TestCase):

@@ -144,7 +144,7 @@ def _process_text(row):
             continue
         values = [
             element.attrib.get(key, "")
-            for key in ("name", "process", "path", "pid", "id")
+            for key in ("name", "process", "path", "fmt", "pid", "id")
         ]
         values.append(element.text or "")
         rendered = " ".join(value.strip() for value in values if value.strip())

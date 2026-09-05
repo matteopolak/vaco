@@ -42,6 +42,25 @@ machine/OS recorded in the JSON, and workload thread count when comparing
 results. Treat ratios as same-host, same-template evidence rather than a
 cross-machine baseline.
 
+### Calibrated default-template limitation
+
+On 2026-09-04, a capped one-second `/usr/bin/yes` recording with Xcode's
+CLI-selectable `CPU Counters` template exported
+`CounterMetricAggregatedForProcess`, but each process row contained only a
+four-value `uint64-array`. The trace TOC identified the active mode as
+`bottleneck`; its legend was cycles, Instruction Delivery Bottleneck, Discarded
+Bottleneck, Instruction Processing Bottleneck, and Useful. It did not expose a
+retired-instruction event or a name for each array element. The harness rejects
+that real export with a missing-`instructions` error.
+
+`xctrace record` accepts a template path/name and instrument name, but has no
+flag to select CPU Counters' event/counting configuration. Therefore a
+CLI-only invocation cannot turn the stock bottleneck template into an
+instructions-counting template. Save the configured template in the Instruments
+GUI and supply its path via `--template`; then re-run the example below and add
+the resulting process XML shape as a parser fixture before treating the output
+as Vaco:ffmpeg evidence.
+
 Example:
 
 ```sh
