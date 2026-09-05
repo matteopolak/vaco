@@ -364,11 +364,10 @@ fn composite_packed(
     mode: AlphaMode,
 ) -> Result<()> {
     let unit = geom::plane_unit_bytes(format, 0)?;
-    let alpha_offset = geom::alpha_component(format).map(|c| c.offset as usize);
-    if alpha_offset.is_none() {
+    let Some(alpha_offset) = geom::alpha_component(format).map(|c| c.offset as usize) else {
         copy_opaque_packed(main, overlay, rect, unit);
         return Ok(());
-    }
+    };
     let color_offsets: Vec<usize> = format
         .descriptor()
         .components
@@ -400,11 +399,31 @@ fn composite_packed(
             let Some(src_px) = src_row.get(ox..ox.saturating_add(unit)) else {
                 continue;
             };
-            let a_fg = alpha_offset
-                .and_then(|o| src_px.get(o))
+            let a_fg = src_px
+                .get(alpha_offset)
                 .map_or(1.0, |&b| f64::from(b) / 255.0);
-            let a_bg = alpha_offset
-                .and_then(|o| dst_px.get(o))
+            // With an opaque background, out_a is exactly one and both
+            // alpha modes collapse to this unnormalised over expression.
+            if dst_px
+                .get(alpha_offset)
+                .is_some_and(|&alpha| alpha == u8::MAX)
+            {
+                let background_weight = 1.0 - a_fg;
+                for &off in &color_offsets {
+                    let Some(&fg) = src_px.get(off) else { continue };
+                    let Some(&bg) = dst_px.get(off) else { continue };
+                    if let Some(dst) = dst_px.get_mut(off) {
+                        *dst =
+                            to_u8(f64::from(fg).mul_add(a_fg, f64::from(bg) * background_weight));
+                    }
+                }
+                if let Some(dst) = dst_px.get_mut(alpha_offset) {
+                    *dst = u8::MAX;
+                }
+                continue;
+            }
+            let a_bg = dst_px
+                .get(alpha_offset)
                 .map_or(1.0, |&b| f64::from(b) / 255.0);
             let out_a = combined_alpha(a_fg, a_bg);
             for &off in &color_offsets {
@@ -416,9 +435,7 @@ fn composite_packed(
                     *dst = to_u8(composed);
                 }
             }
-            if let Some(o) = alpha_offset
-                && let Some(dst) = dst_px.get_mut(o)
-            {
+            if let Some(dst) = dst_px.get_mut(alpha_offset) {
                 *dst = to_u8(out_a * 255.0);
             }
         }
@@ -621,6 +638,48 @@ mod tests {
         let s = composite_channel(AlphaMode::Straight, 255.0, 200.0, a_fg, 1.0, out_a);
         let p = composite_channel(AlphaMode::Premultiplied, 255.0, 200.0, a_fg, 1.0, out_a);
         assert_eq!(to_u8(s), to_u8(p));
+    }
+
+    #[test]
+    fn opaque_rgba_background_uses_the_measured_over_result() {
+        // `ffmpeg ... overlay=format=rgb:alpha=straight` emits this rgba row.
+        let pool = FramePool::default();
+        let mut main = pool.acquire_video(PixFmt::Rgba, 1, 1).unwrap();
+        let mut foreground = pool.acquire_video(PixFmt::Rgba, 1, 1).unwrap();
+        main.plane_mut(0)
+            .unwrap()
+            .row_mut(0)
+            .unwrap()
+            .copy_from_slice(&[0, 255, 80, 255]);
+        foreground
+            .plane_mut(0)
+            .unwrap()
+            .row_mut(0)
+            .unwrap()
+            .copy_from_slice(&[255, 0, 0, 100]);
+        composite(
+            &mut main,
+            &foreground,
+            PixFmt::Rgba,
+            clip(0, 0, 1, 1, 1, 1).unwrap(),
+            AlphaMode::Straight,
+        )
+        .unwrap();
+        assert_eq!(main.plane(0).unwrap().row(0).unwrap(), &[100, 155, 49, 255]);
+        main.plane_mut(0)
+            .unwrap()
+            .row_mut(0)
+            .unwrap()
+            .copy_from_slice(&[0, 255, 80, 255]);
+        composite(
+            &mut main,
+            &foreground,
+            PixFmt::Rgba,
+            clip(0, 0, 1, 1, 1, 1).unwrap(),
+            AlphaMode::Premultiplied,
+        )
+        .unwrap();
+        assert_eq!(main.plane(0).unwrap().row(0).unwrap(), &[100, 155, 49, 255]);
     }
 
     #[test]

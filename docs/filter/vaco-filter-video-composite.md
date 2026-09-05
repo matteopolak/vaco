@@ -50,8 +50,11 @@ hand-derived per format.
 
 When the resolved format has no alpha channel, the equation reduces exactly to
 the foreground sample. `blend` therefore copies the clipped span in each
-packed or planar plane; retain that fast path only for alpha-free formats, as
-the alpha-bearing path must keep its snapshots and floating-point formula.
+packed or planar plane. In packed alpha-bearing frames, an opaque background
+pixel also makes `out_a` exactly `1`: both alpha modes reduce to
+`fg*a_fg + bg*(1-a_fg)`, so that pixel skips the per-channel normalization and
+keeps alpha `255`. The remaining alpha-bearing pixels retain the measured
+floating-point formula; planar formats retain their alpha snapshots.
 
 ### `overlay` reformats through `vaco-scale`, never hand-derives a colour matrix
 
