@@ -364,7 +364,7 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         Error::Unsupported("vaco-codec-hevc: first tile leaf has no mpm_idx suffix bin")
     ));
     let first_luma_mode = tile_states
-        .first()
+        .get_mut(0)
         .expect("first tile state exists")
         .resolve_first_ctb_leaf_luma_mode(
             u32::from(sps.log2_min_cb_size),
@@ -372,8 +372,29 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         )
         .expect("first tile MPM index resolves to a luma mode");
     assert_eq!(first_luma_mode, 1);
+    let first_second_prev_intra_flag = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_leaf_second_prev_intra_luma_pred_flag(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile second PU carries a prev-intra flag");
+    assert!(first_second_prev_intra_flag);
+    let second_second_prev_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_leaf_second_prev_intra_luma_pred_flag(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no second PU flag");
+    assert!(matches!(
+        second_second_prev_error,
+        Error::Unsupported("vaco-codec-hevc: first tile leaf first PU mode is not resolved")
+    ));
     let second_luma_error = tile_states
-        .get(1)
+        .get_mut(1)
         .expect("second tile state exists")
         .resolve_first_ctb_leaf_luma_mode(
             u32::from(sps.log2_min_cb_size),

@@ -40,6 +40,8 @@ pub struct TileCabacState<'a> {
     first_ctb_leaf_prev_intra: Option<bool>,
     first_ctb_leaf_mpm_prefix: Option<bool>,
     first_ctb_leaf_mpm_suffix: Option<bool>,
+    first_ctb_leaf_luma_mode: Option<u8>,
+    first_ctb_leaf_second_prev_intra: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -346,7 +348,7 @@ impl TileCabacState<'_> {
     /// is not 1, and [`vaco_core::Error::InvalidData`] for inconsistent leaf
     /// dimensions.
     pub fn resolve_first_ctb_leaf_luma_mode(
-        &self,
+        &mut self,
         leaf_log2_size: u32,
         min_cb_log2_size: u32,
     ) -> Result<u8> {
@@ -360,7 +362,52 @@ impl TileCabacState<'_> {
                 "vaco-codec-hevc: first tile leaf dimensions are invalid",
             ));
         }
-        Ok(crate::intra_mode::mpm_list(crate::intra_mode::DC_IDX, crate::intra_mode::DC_IDX)[1])
+        let mode =
+            *crate::intra_mode::mpm_list(crate::intra_mode::DC_IDX, crate::intra_mode::DC_IDX)
+                .get(1)
+                .ok_or(Error::InvalidData(
+                    "vaco-codec-hevc: first tile MPM list is incomplete",
+                ))?;
+        self.first_ctb_leaf_luma_mode = Some(mode);
+        Ok(mode)
+    }
+
+    /// Decode the second 4x4 PU's `prev_intra_luma_pred_flag`.
+    ///
+    /// The first PU's MPM index and luma mode must be resolved before the
+    /// second PU is visited in §7.3.8.5 order. This consumes only that next
+    /// context-coded flag; its MPM/rem-mode syntax remains unconsumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] when the first PU mode was
+    /// not the measured `INTRA_DC`, and [`vaco_core::Error::InvalidData`] for
+    /// inconsistent leaf dimensions.
+    pub fn decode_first_ctb_leaf_second_prev_intra_luma_pred_flag(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<bool> {
+        if self.first_ctb_leaf_luma_mode != Some(crate::intra_mode::DC_IDX) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile leaf first PU mode is not resolved",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        let context = self
+            .contexts
+            .prev_intra_luma_pred
+            .first_mut()
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: prev_intra_luma_pred context is missing",
+            ))?;
+        let prev = self.cabac.decode_decision(context) != 0;
+        self.first_ctb_leaf_second_prev_intra = Some(prev);
+        Ok(prev)
     }
 }
 
@@ -632,6 +679,8 @@ impl TileLayout {
                 first_ctb_leaf_prev_intra: None,
                 first_ctb_leaf_mpm_prefix: None,
                 first_ctb_leaf_mpm_suffix: None,
+                first_ctb_leaf_luma_mode: None,
+                first_ctb_leaf_second_prev_intra: None,
             });
         }
         Ok(states)
