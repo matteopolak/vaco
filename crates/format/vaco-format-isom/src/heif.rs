@@ -98,11 +98,24 @@ pub fn parse_iinf(iinf: &IsoBox<'_>) -> Vec<ItemInfo> {
     };
     // `entry_count` is 16 bits in version 0, 32 bits otherwise (§8.11.6.2).
     let count_width = if full.version == 0 { 2 } else { 4 };
+    let mut r = full.reader();
+    let entry_count = if full.version == 0 {
+        u32::from(r.be16())
+    } else {
+        r.be32()
+    };
+    if r.overrun() {
+        return Vec::new();
+    }
     iinf.children_after(4usize.saturating_add(count_width))
         .flatten()
+        .take(
+            usize::try_from(entry_count)
+                .unwrap_or(MAX_ITEMS)
+                .min(MAX_ITEMS),
+        )
         .filter(|b| b.kind() == boxes::INFE)
         .filter_map(|b| ItemInfo::parse(&b))
-        .take(MAX_ITEMS)
         .collect()
 }
 
@@ -495,6 +508,9 @@ mod tests {
         assert_eq!(info.item_type, FourCc::new(b"av01"));
         assert_eq!(info.name, "Color");
         assert!(!info.hidden);
+
+        let iinf = fullbx(b"iinf", 0, 0, &[&[0, 1], raw.as_slice()].concat());
+        assert_eq!(parse_iinf(&first_box(&iinf)), vec![info]);
     }
 
     #[test]
@@ -507,6 +523,15 @@ mod tests {
         ];
         let raw = fullbx(b"infe", 4, 0, &body);
         assert!(ItemInfo::parse(&first_box(&raw)).is_none());
+    }
+
+    #[test]
+    fn iinf_refuses_entries_past_its_declared_count() {
+        // This is the real AVIF item's `infe`, after an `iinf` claiming no
+        // entries. The child must not manufacture an item outside the table.
+        let infe = fullbx(b"infe", 2, 0, &hex_bytes("0001000061763031436f6c6f7200"));
+        let iinf = fullbx(b"iinf", 0, 0, &[&[0, 0], infe.as_slice()].concat());
+        assert!(parse_iinf(&first_box(&iinf)).is_empty());
     }
 
     /// `iloc` bytes from the same file: version 0, one item, one extent

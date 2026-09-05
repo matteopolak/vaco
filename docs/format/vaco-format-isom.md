@@ -787,9 +787,10 @@ Named so the demuxer's author knows what is not here:
   out-of-bounds apertures are refused. `iloc` accepts only its defined `0`,
   `4`, and `8` byte field widths and versions `0` through `2`; `ipma` accepts
   only its version `0`/`1` item-ID layouts, and `infe` only versions `0`
-  through `3`. An unsupported width or version refuses the entire
-  location/property/item table before it can invent a zero-length extent or
-  apply the wrong layout. Still box-layer
+  through `3`. `iinf`'s declared entry count also bounds the `infe` children
+  it exposes. An unsupported width or version refuses the entire
+  location/property/item table before it can invent a zero-length extent,
+  surface a trailing item, or apply the wrong layout. Still box-layer
   only here: `iovl`/`iden`
   derived items, `auxl`/`thmb` reference semantics, and `irot`/`imir`
   transformative properties.
