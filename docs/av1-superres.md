@@ -42,8 +42,11 @@ later stage.
   The OBU SHA-256 is
   `66e7ca5b991ed6511075fcf23b1dcd8901429cacdbd315161e75b81b421c1b90`.
   Vaco compares all 9,216 bytes of the key/reference frame to dav1d before
-  feeding the P frame, then requires the named `frame_size_with_refs` refusal.
-  It must not fabricate a resolution or emit a partial second frame.
+  feeding the P frame. It retains every key-frame refresh slot's upscaled,
+  coded, and render dimensions; the P header selects that state through
+  `frame_size_with_refs()` and consumes its own `superres_params()` before
+  the named inter-prediction refusal. It must not fabricate a resolution or
+  emit a partial second frame.
 
 The oracle generator is `scripts/gen-av1-superres-oracle.py`; it only
 extracts the permitted pinned dav1d scalar oracle into a throwaway C build.
@@ -76,15 +79,12 @@ Mi-padded source bound until resampling finishes. Update the `[[table]]`
 entry in `provenance/vaco-codec-av1-superres.toml` whenever the 64x8 table is
 renamed or moved.
 
-`frame_size_with_refs()` is intentionally not implemented here. The real P
-fixture now proves the decoder produces the exact active-superres reference
-frame before refusing the dependent inter frame as
-`frame_size_with_refs; reference-store/inter prediction is not decoded`.
-AV1 §5.9.5/§5.9.7/§6.8.6 requires a decoder-owned store for each referenced
-frame's dimensions and reconstruction, then runs `superres_params()` from the
-selected `UpscaledWidth`. That remains an explicit remainder until inter
-references and prediction are implemented; do not treat the intra-only result
-as completing that interaction.
+The decoder implements the size-only portion of `frame_size_with_refs()`:
+AV1 §5.9.5/§5.9.7/§6.8.6 requires the selected reference's dimensions before
+the current frame's `superres_params()` can determine coded geometry. The
+reference store deliberately retains no pixels yet, and the decoder refuses
+after the P header's frame-level motion flags with `inter prediction is not
+decoded`. Do not treat this header-level result as inter reconstruction.
 
 The issue's Argon profiles are not available in the checked-in media lock, so
 they are not a conformance claim or a reason to close the broader issue.

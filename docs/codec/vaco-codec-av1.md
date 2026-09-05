@@ -150,13 +150,14 @@ rather than silently dropped — see that file's own module doc.
   exist and correctly return `Error::Unsupported` by name when a real
   stream actually exercises them — implement the missing math behind that
   same call site rather than adding a new read path.
-- **Extending superres to inter frames**: implement the decoder's reference
-  store, `frame_size_with_refs()`, and inter prediction together. The real
-  active-superres I→P regression verifies the I frame's complete 9,216-byte
-  dav1d match and then requires the P frame's named refusal; AV1
-  §5.9.5/§5.9.7/§6.8.6 derives the referenced `UpscaledWidth` before
-  `superres_params()`, so decoding that P frame without the store would guess
-  both geometry and pixels.
+- **Extending superres to inter frames**: the decoder already retains
+  `refresh_frame_flags`' reference dimensions and uses them in
+  `frame_size_with_refs()` before applying the current P frame's
+  `superres_params()`. The real active-superres I→P regression verifies the
+  I frame's complete 9,216-byte dav1d match, then the P frame's named
+  inter-prediction refusal. Add the matching pixel store and block prediction
+  at that established header boundary; do not replace it with inferred
+  geometry.
 - Do not add a comparison test without an `#[ignore]`/named-gap doc comment
   unless it actually passes — `tests/oracle.rs` is the place regressions
   and gaps both get recorded, not just the passing cases.

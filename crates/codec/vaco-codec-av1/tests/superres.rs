@@ -142,17 +142,16 @@ fn flat_superres_keyframe_matches_dav1d_on_every_output_plane() {
     );
 }
 
-/// The real P frame following `superres-96x64.obu`. Its §5.9.5 inter syntax
-/// reaches `frame_size_with_refs()`, which needs the prior frame's retained
-/// dimensions; this bounded intra-only decoder names that missing
-/// reference-store/inter-prediction boundary rather than inventing a size.
+/// The real P frame following `superres-96x64.obu`. Its §5.9.7 syntax takes
+/// its dimensions from the retained key-frame reference, then applies its own
+/// super-resolution parameters before inter prediction begins.
 const ACTIVE_SUPERRES_INTER: &[u8] = &[
     0x12, 0x00, 0x32, 0x0f, 0x30, 0x02, 0x00, 0x00, 0x00, 0x00, 0x1d, 0x48, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x9c, 0x4e,
 ];
 
 #[test]
-fn active_superres_reference_frame_is_exact_before_inter_refusal() {
+fn active_superres_reference_frame_is_exact_before_inter_prediction_refusal() {
     const WIDTH: usize = 96;
     const HEIGHT: usize = 64;
     let key: &[u8] = include_bytes!("fixtures/superres-96x64.obu");
@@ -196,7 +195,7 @@ fn active_superres_reference_frame_is_exact_before_inter_refusal() {
     assert!(matches!(
         error,
         Error::Unsupported(
-            "vaco-codec-av1: inter frame uses frame_size_with_refs; reference-store/inter prediction is not decoded"
+            "vaco-codec-av1: inter frame header parsed through frame_size_with_refs; inter prediction is not decoded"
         )
     ));
 }

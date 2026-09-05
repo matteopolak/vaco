@@ -4,8 +4,9 @@
 //!
 //! # Scope
 //!
-//! `FrameIsIntra` only (rejected earlier, in [`crate::frame_header`]), and
-//! within that: no palette, no `use_intrabc`, no `use_filter_intra`, no
+//! `FrameIsIntra` only reaches tile decoding. Inter headers first consume
+//! their reference-derived size, then stop before block prediction. Within
+//! the intra path: no palette, no `use_intrabc`, no `use_filter_intra`, no
 //! segmentation, no delta-q/delta-lf. Every one of those is gated by a
 //! frame-header flag this crate's own encoder configuration keeps off
 //! (`allow_screen_content_tools=0` disables palette and intrabc together;
@@ -32,7 +33,7 @@ use vaco_parse_av1::obu::{Av1Framing, ObuType, units};
 use vaco_parse_av1::seq::SequenceHeader;
 
 use crate::cdf::TileCdf;
-use crate::frame_header::{self, FrameHeader};
+use crate::frame_header::{self, FrameHeader, ReferenceFrameSizes};
 use crate::framebuf::{Picture, Plane};
 use crate::predict::{self, PredMode};
 use crate::restoration::{self, PlaneConfig, RestorationType, RestorationUnit};
@@ -248,6 +249,7 @@ pub struct Av1Decoder {
     budget: Budget,
     machine: vaco_codec_core::machine::Machine<Frame>,
     seq: Option<SequenceHeader>,
+    references: ReferenceFrameSizes,
 }
 
 impl std::fmt::Debug for Av1Decoder {
@@ -267,6 +269,7 @@ impl Av1Decoder {
                 1,
             ),
             seq: None,
+            references: ReferenceFrameSizes::default(),
         }
     }
 
@@ -293,6 +296,7 @@ impl Av1Decoder {
                 t if t == ObuType::SEQUENCE_HEADER => {
                     let sh = SequenceHeader::parse(payload, &mut self.budget)?;
                     self.seq = Some(sh);
+                    self.references.clear();
                 }
                 t if t == ObuType::METADATA => {
                     if let Ok(m) = vaco_parse_av1::metadata::parse(payload, &mut self.budget) {
@@ -314,11 +318,12 @@ impl Av1Decoder {
                             "vaco-codec-av1: frame header before any sequence header",
                         ));
                     };
-                    let fh = FrameHeader::parse(
+                    let fh = FrameHeader::parse_with_references(
                         payload,
                         &seq,
                         unit.header.temporal_id,
                         unit.header.spatial_id,
+                        &self.references,
                     )?;
                     pending_header = Some(fh);
                 }
@@ -335,11 +340,12 @@ impl Av1Decoder {
                         ));
                     };
                     let mut r = vaco_bitstream::BitReader::new(payload);
-                    let fh = FrameHeader::parse_from_reader(
+                    let fh = FrameHeader::parse_from_reader_with_references(
                         &mut r,
                         &seq,
                         unit.header.temporal_id,
                         unit.header.spatial_id,
+                        &self.references,
                     )?;
                     r.check().map_err(|_| {
                         Error::InvalidData("frame_obu's frame_header_obu ran past its payload")
@@ -347,6 +353,7 @@ impl Av1Decoder {
                     r.align();
                     let tile_payload = r.remaining_bytes();
                     let frame = decode_frame(&seq, &fh, tile_payload, &mut self.budget)?;
+                    self.references.refresh(fh.refresh_frame_flags, fh.size);
                     let mut frame = frame;
                     frame.pts = pts;
                     frame.duration = duration;
@@ -377,6 +384,7 @@ impl Av1Decoder {
                         ));
                     };
                     let frame = decode_frame(&seq, &fh, payload, &mut self.budget)?;
+                    self.references.refresh(fh.refresh_frame_flags, fh.size);
                     let mut frame = frame;
                     frame.pts = pts;
                     frame.duration = duration;
@@ -423,6 +431,7 @@ impl Decoder for Av1Decoder {
     fn flush(&mut self) {
         self.machine.flush();
         self.seq = None;
+        self.references.clear();
         self.budget = Budget::new(self.limits.clone());
     }
 }

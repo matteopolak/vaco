@@ -16,7 +16,8 @@
 //! Out of scope, left for later work: inter prediction, deblocking (active
 //! restoration refuses nonzero levels rather than filter reconstructed pixels),
 //! film grain synthesis, frame threading/DPB, and
-//! Argon conformance. An inter frame's header is rejected with
+//! Argon conformance. An inter frame's reference-derived header is parsed
+//! against retained reference sizes, then block prediction returns
 //! [`vaco_core::Error::Unsupported`] rather than guessed at.
 //!
 //! # Division of labour with `vaco-parse-av1`
@@ -25,8 +26,8 @@
 //! in full, and `AV1CodecConfigurationRecord` (`av1C`); this crate depends
 //! on it for all three rather than reimplementing them (D14.1 permits a
 //! `vaco-codec-*` crate depending on a `vaco-parse-*` crate, not the
-//! reverse). Its own `frame_header` module covers only the intra path and
-//! deliberately does not extend to `frame_size_with_refs()`.
+//! reverse). Its own `frame_header` module covers the intra path and the
+//! bounded inter prefix through `frame_size_with_refs()`.
 //!
 //! # Module map
 //!

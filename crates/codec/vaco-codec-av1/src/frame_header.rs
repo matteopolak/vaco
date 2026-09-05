@@ -20,9 +20,9 @@
 //! `reduced_tx_set` and `film_grain_params()` (parsed in full for bit
 //! alignment; grain synthesis is issue #343).
 //!
-//! An inter frame's header (`FrameIsIntra == 0`) is rejected with
-//! [`Error::Unsupported`] before any inter-only syntax is touched, rather
-//! than guessed at — inter prediction is issue #34, another agent's scope.
+//! An inter frame's header (`FrameIsIntra == 0`) is parsed through its
+//! reference-derived size and frame-level motion flags. The decoder then
+//! returns [`Error::Unsupported`] before block inter prediction is touched.
 //!
 //! `Vaco-Spec-Ref: aom-av1-spec §5.9 (frame header OBU syntax)`.
 
@@ -38,6 +38,8 @@ pub use vaco_parse_av1::{FrameSize, FrameType, SequenceHeader};
 pub const PRIMARY_REF_NONE: u32 = 7;
 /// `TOTAL_REFS_PER_FRAME`, §3.
 pub const TOTAL_REFS_PER_FRAME: usize = 8;
+/// `REFS_PER_FRAME`, §3.
+const REFS_PER_FRAME: usize = 7;
 /// `MAX_SEGMENTS`, §3.
 pub const MAX_SEGMENTS: usize = 8;
 /// `SEG_LVL_MAX`, §3.
@@ -173,6 +175,8 @@ pub enum TxMode {
 pub struct FrameHeader {
     pub frame_type: FrameType,
     pub show_frame: bool,
+    /// Slots this decoded frame replaces in the reference-size store.
+    pub refresh_frame_flags: u8,
     pub error_resilient_mode: bool,
     pub disable_cdf_update: bool,
     pub disable_frame_end_update_cdf: bool,
@@ -201,26 +205,72 @@ pub struct FrameHeader {
     pub cdef: CdefParams,
 }
 
+/// Decoder-owned `RefUpscaledWidth`/`RefFrameHeight`/`RefRender*` state.
+///
+/// A frame's geometry is retained independently of its pixels so that an
+/// inter header can safely consume `frame_size_with_refs()` before the
+/// unimplemented block-prediction path needs a picture store.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReferenceFrameSizes {
+    slots: [Option<FrameSize>; NUM_REF_FRAMES],
+}
+
+impl ReferenceFrameSizes {
+    pub(crate) fn clear(&mut self) {
+        self.slots.fill(None);
+    }
+
+    pub(crate) fn refresh(&mut self, flags: u8, size: FrameSize) {
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            if flags & (1u8 << index) != 0 {
+                *slot = Some(size);
+            }
+        }
+    }
+
+    fn get(&self, index: u8) -> Option<FrameSize> {
+        self.slots.get(usize::from(index)).copied().flatten()
+    }
+}
+
 impl FrameHeader {
-    /// Parse `uncompressed_header()`'s payload for an intra path.
+    /// Parse `uncompressed_header()`'s payload through the bounded inter prefix.
     ///
     /// `temporal_id`/`spatial_id` come from the OBU extension header (0/0 if
     /// it had none), needed only for the `buffer_removal_time` loop.
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] for `show_existing_frame`, any non-intra
-    /// `frame_type`, or `allow_intrabc` (intra block copy is not
-    /// implemented). [`Error::InvalidData`] if the payload is truncated or a
-    /// value is out of range.
+    /// [`Error::Unsupported`] for `show_existing_frame`, an inter frame
+    /// after its reference-derived header, or `allow_intrabc` (intra block
+    /// copy is not implemented). [`Error::InvalidData`] if the payload is
+    /// truncated or a value is out of range.
     pub fn parse(
         payload: &[u8],
         seq: &SequenceHeader,
         temporal_id: u8,
         spatial_id: u8,
     ) -> Result<Self> {
+        let references = ReferenceFrameSizes::default();
+        Self::parse_with_references(payload, seq, temporal_id, spatial_id, &references)
+    }
+
+    /// `uncompressed_header()` with the decoder's retained reference sizes.
+    pub(crate) fn parse_with_references(
+        payload: &[u8],
+        seq: &SequenceHeader,
+        temporal_id: u8,
+        spatial_id: u8,
+        references: &ReferenceFrameSizes,
+    ) -> Result<Self> {
         let mut r = BitReader::new(payload);
-        let result = Self::parse_from_reader(&mut r, seq, temporal_id, spatial_id);
+        let result = Self::parse_from_reader_with_references(
+            &mut r,
+            seq,
+            temporal_id,
+            spatial_id,
+            references,
+        );
         r.check()
             .map_err(|_| Error::InvalidData("frame_header_obu ran past the end of its payload"))?;
         result
@@ -245,7 +295,19 @@ impl FrameHeader {
         temporal_id: u8,
         spatial_id: u8,
     ) -> Result<Self> {
-        parse_inner(r, seq, temporal_id, spatial_id)
+        let references = ReferenceFrameSizes::default();
+        Self::parse_from_reader_with_references(r, seq, temporal_id, spatial_id, &references)
+    }
+
+    /// `frame_header_obu()` with the decoder's retained reference sizes.
+    pub(crate) fn parse_from_reader_with_references(
+        r: &mut BitReader<'_>,
+        seq: &SequenceHeader,
+        temporal_id: u8,
+        spatial_id: u8,
+        references: &ReferenceFrameSizes,
+    ) -> Result<Self> {
+        parse_inner(r, seq, temporal_id, spatial_id, references)
     }
 
     /// `get_qindex(1, segmentId)`, §7.12.2 — the `ignoreDeltaQ = 1` form
@@ -271,6 +333,7 @@ fn parse_inner(
     seq: &SequenceHeader,
     temporal_id: u8,
     spatial_id: u8,
+    references: &ReferenceFrameSizes,
 ) -> Result<FrameHeader> {
     let id_len = u32::from(seq.additional_frame_id_length) + u32::from(seq.delta_frame_id_length);
 
@@ -308,24 +371,21 @@ fn parse_inner(
                 r.get_bit() != 0
             };
     }
-    if !frame_type.is_intra() {
-        return Err(Error::Unsupported(
-            "vaco-codec-av1: inter frame uses frame_size_with_refs; reference-store/inter prediction is not decoded",
-        ));
-    }
-
     let disable_cdf_update = r.get_bit() != 0;
     let allow_screen_content_tools = if seq.seq_force_screen_content_tools == SELECT_VALUE {
         r.get_bit() != 0
     } else {
         seq.seq_force_screen_content_tools != 0
     };
-    // force_integer_mv: read only to consume the right bits; FrameIsIntra
-    // forces the value to 1 regardless, and this crate has no inter motion
-    // vectors to apply it to.
-    if allow_screen_content_tools && seq.seq_force_integer_mv == SELECT_VALUE {
-        let _force_integer_mv = r.get_bit() != 0;
-    }
+    let force_integer_mv = if allow_screen_content_tools {
+        if seq.seq_force_integer_mv == SELECT_VALUE {
+            r.get_bit() != 0
+        } else {
+            seq.seq_force_integer_mv != 0
+        }
+    } else {
+        false
+    };
 
     if seq.frame_id_numbers_present_flag {
         let _current_frame_id = r.get(id_len);
@@ -341,12 +401,11 @@ fn parse_inner(
 
     let _order_hint = r.get(u32::from(seq.order_hint_bits));
 
-    // FrameIsIntra -> primary_ref_frame is always PRIMARY_REF_NONE, so this
-    // crate never loads a saved CDF/segmentation-map context from an
-    // earlier frame — every frame it decodes starts from the specification
-    // defaults, which is also why `disable_frame_end_update_cdf` below is
-    // parsed but never acted on.
-    let primary_ref_frame = PRIMARY_REF_NONE;
+    let primary_ref_frame = if frame_type.is_intra() || error_resilient_mode {
+        PRIMARY_REF_NONE
+    } else {
+        r.get(3)
+    };
 
     if seq.decoder_model_info_present_flag {
         let buffer_removal_time_present_flag = r.get_bit() != 0;
@@ -375,6 +434,33 @@ fn parse_inner(
         for _ in 0..NUM_REF_FRAMES {
             let _ref_order_hint = r.get(u32::from(seq.order_hint_bits));
         }
+    }
+
+    if !frame_type.is_intra() {
+        let ref_frame_idx = parse_ref_frame_indices(r, seq)?;
+        if seq.frame_id_numbers_present_flag {
+            let delta_bits = u32::from(seq.delta_frame_id_length);
+            for _ in 0..REFS_PER_FRAME {
+                let _delta_frame_id_minus_1 = r.get(delta_bits);
+            }
+        }
+        let size = if frame_size_override_flag && !error_resilient_mode {
+            parse_frame_size_with_refs(r, seq, references, ref_frame_idx)?
+        } else {
+            parse_frame_size(r, seq, frame_size_override_flag)?
+        };
+        if !force_integer_mv {
+            let _allow_high_precision_mv = r.get_bit();
+        }
+        parse_interpolation_filter(r);
+        let _is_motion_mode_switchable = r.get_bit();
+        if !error_resilient_mode && seq.enable_ref_frame_mvs {
+            let _use_ref_frame_mvs = r.get_bit();
+        }
+        let _ = size;
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: inter frame header parsed through frame_size_with_refs; inter prediction is not decoded",
+        ));
     }
 
     let size = parse_frame_size(r, seq, frame_size_override_flag)?;
@@ -445,6 +531,7 @@ fn parse_inner(
     Ok(FrameHeader {
         frame_type,
         show_frame,
+        refresh_frame_flags: u8::try_from(refresh_frame_flags).unwrap_or(0),
         error_resilient_mode,
         disable_cdf_update,
         disable_frame_end_update_cdf,
@@ -470,6 +557,60 @@ fn parse_inner(
 const SUPERRES_NUM: u32 = 8;
 const SUPERRES_DENOM_MIN: u32 = 9;
 
+fn parse_ref_frame_indices(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+) -> Result<[u8; REFS_PER_FRAME]> {
+    if seq.enable_order_hint && r.get_bit() != 0 {
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: inter frame uses frame_refs_short_signaling; reference selection is not decoded",
+        ));
+    }
+    Ok(std::array::from_fn(|_| u8::try_from(r.get(3)).unwrap_or(0)))
+}
+
+/// `frame_size_with_refs()`, §5.9.7: inherit the first selected reference's
+/// display geometry, then consume this frame's independent superres syntax.
+fn parse_frame_size_with_refs(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    references: &ReferenceFrameSizes,
+    indices: [u8; REFS_PER_FRAME],
+) -> Result<FrameSize> {
+    let mut inherited = None;
+    for index in indices {
+        if r.get_bit() != 0 {
+            inherited = Some(references.get(index));
+            break;
+        }
+    }
+    let reference = match inherited {
+        Some(Some(reference)) => reference,
+        Some(None) => {
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: frame_size_with_refs selected an unavailable reference frame",
+            ));
+        }
+        None => return parse_frame_size(r, seq, true),
+    };
+    let (coded_width, use_superres) = parse_superres_params(r, seq, reference.upscaled_width);
+    frame_size_from_parts(
+        coded_width,
+        reference.coded_height,
+        reference.upscaled_width,
+        reference.render_width,
+        reference.render_height,
+        use_superres,
+    )
+}
+
+fn parse_interpolation_filter(r: &mut BitReader<'_>) {
+    let is_filter_switchable = r.get_bit() != 0;
+    if !is_filter_switchable {
+        let _interpolation_filter = r.get(2);
+    }
+}
+
 #[allow(
     clippy::integer_division,
     reason = "§5.9.7's own rounding-division pseudocode"
@@ -479,7 +620,7 @@ fn parse_frame_size(
     seq: &SequenceHeader,
     frame_size_override_flag: bool,
 ) -> Result<FrameSize> {
-    let (mut frame_width, frame_height) = if frame_size_override_flag {
+    let (frame_width, frame_height) = if frame_size_override_flag {
         (
             r.get(u32::from(seq.frame_width_bits)) + 1,
             r.get(u32::from(seq.frame_height_bits)) + 1,
@@ -487,28 +628,62 @@ fn parse_frame_size(
     } else {
         (seq.max_frame_width, seq.max_frame_height)
     };
-    let use_superres = seq.enable_superres && r.get_bit() != 0;
-    let superres_denom = if use_superres {
-        r.get(3) + SUPERRES_DENOM_MIN
-    } else {
-        SUPERRES_NUM
-    };
     let upscaled_width = frame_width;
-    if use_superres {
-        frame_width = (upscaled_width * SUPERRES_NUM + superres_denom / 2) / superres_denom.max(1);
-    }
-    if frame_width == 0 || frame_height == 0 {
-        return Err(Error::InvalidData("frame_size() produced a zero dimension"));
-    }
+
+    let (coded_width, use_superres) = parse_superres_params(r, seq, upscaled_width);
     let render_and_frame_size_different = r.get_bit() != 0;
     let (render_width, render_height) = if render_and_frame_size_different {
         (r.get(16) + 1, r.get(16) + 1)
     } else {
         (upscaled_width, frame_height)
     };
+    frame_size_from_parts(
+        coded_width,
+        frame_height,
+        upscaled_width,
+        render_width,
+        render_height,
+        use_superres,
+    )
+}
+
+#[allow(
+    clippy::integer_division,
+    reason = "§5.9.8's own rounding-division pseudocode"
+)]
+fn parse_superres_params(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    upscaled_width: u32,
+) -> (u32, bool) {
+    let use_superres = seq.enable_superres && r.get_bit() != 0;
+    let superres_denom = if use_superres {
+        r.get(3) + SUPERRES_DENOM_MIN
+    } else {
+        SUPERRES_NUM
+    };
+    let coded_width = if use_superres {
+        (upscaled_width * SUPERRES_NUM + superres_denom / 2) / superres_denom.max(1)
+    } else {
+        upscaled_width
+    };
+    (coded_width, use_superres)
+}
+
+fn frame_size_from_parts(
+    coded_width: u32,
+    coded_height: u32,
+    upscaled_width: u32,
+    render_width: u32,
+    render_height: u32,
+    use_superres: bool,
+) -> Result<FrameSize> {
+    if coded_width == 0 || coded_height == 0 {
+        return Err(Error::InvalidData("frame_size() produced a zero dimension"));
+    }
     Ok(FrameSize {
-        coded_width: frame_width,
-        coded_height: frame_height,
+        coded_width,
+        coded_height,
         upscaled_width,
         render_width,
         render_height,
@@ -1099,6 +1274,20 @@ mod tests {
         for n in 0..=data.len() {
             let _ = FrameHeader::parse(&data[..n], &seq, 0, 0);
         }
+    }
+
+    #[test]
+    fn found_ref_without_a_saved_size_does_not_read_an_absent_literal_size() {
+        let seq = seq_header();
+        let references = ReferenceFrameSizes::default();
+        let mut bits = BitReader::new(&[0x80, 0, 0, 0]);
+        let result = parse_frame_size_with_refs(&mut bits, &seq, &references, [0; REFS_PER_FRAME]);
+        assert!(matches!(
+            result,
+            Err(Error::Unsupported(
+                "vaco-codec-av1: frame_size_with_refs selected an unavailable reference frame"
+            ))
+        ));
     }
 
     #[test]
