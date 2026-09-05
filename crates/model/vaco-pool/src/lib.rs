@@ -1,35 +1,17 @@
 //! Aligned buffer pooling.
 //!
-//! Steady-state decode must not allocate: a 1080p frame is ~3 MB and allocating
-//! one per frame at 60 fps dominates the profile. The pool recycles buffers whose
-//! last reference has dropped.
-//!
-//! All buffers are aligned to 64 bytes unconditionally. `FFmpeg` derives alignment
-//! from the build's widest SIMD width; taking the maximum removes a variable
-//! nobody benefits from reasoning about.
-//!
-//! # The three moving parts
-//!
-//! * [`Buffer`] — a refcounted, aligned, copy-on-write byte buffer. This is the
-//!   storage that `vaco-frame`'s planes and `vaco-packet`'s payloads are both
-//!   built on, which is why their ownership models are one design and not two.
-//! * [`BufferPool`] — a free list of same-sized buffers, bounded in both bytes
-//!   and count.
-//! * The alignment scheme — over-allocate and sub-slice, documented at length in
-//!   `aligned.rs` and in `docs/model/vaco-pool.md`. It is the non-obvious part.
-//!
-//! # How recycling happens
-//!
-//! There is no `release` method anywhere in the project, so a buffer cannot be
-//! returned twice or forgotten. `Buffer` is `Arc<BufferInner>`; `BufferInner`
-//! has a `Drop` that pushes its storage back onto the pool's free list, and
-//! `Arc` runs that `Drop` exactly when the strong count reaches zero. The
-//! back-reference is a `Weak`, so a long-lived frame never keeps a dead pool
-//! alive.
-//!
+//! Steady-state decode must not allocate: a 1080p frame is about 3 MB, and the
+//! pool recycles each buffer after its last reference drops. All buffers use
+//! unconditional 64-byte alignment, the widest SIMD/cache-line boundary this
+//! layer exposes.
+//! [`Buffer`] is a refcounted, aligned, copy-on-write byte buffer used by
+//! `vaco-frame` planes and `vaco-packet` payloads. [`BufferPool`] recycles
+//! same-sized buffers within byte and count bounds. `BufferInner` returns its
+//! storage on `Drop`, and a `Weak` back-reference keeps a dead pool collectable.
+//! The over-allocation alignment scheme is detailed in `aligned.rs` and
+//! `docs/model/vaco-pool.md`.
 //! ```
 //! use vaco_pool::BufferPool;
-//!
 //! let pool = BufferPool::new(4096);
 //! let a = pool.get()?;
 //! assert!(a.is_aligned());
@@ -40,13 +22,10 @@
 //! # drop(b);
 //! # Ok::<(), vaco_core::Error>(())
 //! ```
-//!
 //! # Copy-on-write
-//!
 //! ```
 //! use vaco_limits::{Budget, Limits};
 //! use vaco_pool::Buffer;
-//!
 //! let mut budget = Budget::new(Limits::strict());
 //! let mut a = Buffer::from_slice(&mut budget, b"original")?;
 //! let b = a.clone();               // refcount bump, no copy
