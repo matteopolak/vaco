@@ -842,6 +842,10 @@ crate decides what becomes a stream:
   integer `width`/`height` and `horizontal_offset`/`vertical_offset`. A
   fractional edge or out-of-bounds aperture likewise produces no group, so
   neither the probe nor the CLI can advertise a crop it cannot perform.
+
+An `iinf` table with duplicate `item_ID` values refuses the item file before
+the `iinf`, `iloc`, and `ipma` joins can alias one item's properties or bytes
+onto another item's stream.
 * One packet per stream, `pts 0 dts 0 duration 1`, keyframe, `pos` at the
   first extent; several `iloc` extents are concatenated. A seek re-arms
   the single frame.

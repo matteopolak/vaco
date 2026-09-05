@@ -336,6 +336,30 @@ fn a_grid_with_multiple_ispe_properties_is_refused() {
 }
 
 #[test]
+fn duplicate_item_info_ids_refuse_the_item_file() {
+    let mut bytes = heif();
+    let fourth_infe = bytes
+        .windows(4)
+        .enumerate()
+        .filter_map(|(offset, kind)| (kind == b"infe").then_some(offset))
+        .nth(3)
+        .unwrap();
+    // Give the thumbnail's `infe` the first tile's ID. Without a uniqueness
+    // check, both entries resolve through the first `iloc` record.
+    bytes[fourth_infe + 8..fourth_infe + 10].copy_from_slice(&1u16.to_be_bytes());
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    assert!(
+        Mp4Demuxer::open(
+            src,
+            &NoParsers,
+            &FormatOptions::default(),
+            Mp4Options::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn a_truncated_property_association_table_refuses_the_item_file() {
     let mut bytes = heif();
     let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();

@@ -10,7 +10,7 @@
 //! self-constructed 2×2 `grid` file that ffmpeg itself decodes to the
 //! expected composite (see `docs/format/vaco-demux-mp4.md`).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use vaco_core::{Disposition, MediaType, Rational, Timestamp};
 use vaco_format_core::{Stream, StreamGroup, StreamGroupIndex, StreamGroupKind, TileGrid};
@@ -194,6 +194,10 @@ impl<'a> Meta<'a> {
                 bt::IDAT => me.idat = Some((child.payload, child.payload_offset())),
                 _ => {}
             }
+        }
+        let mut item_ids = HashSet::with_capacity(me.infos.len());
+        if me.infos.iter().any(|info| !item_ids.insert(info.item_id)) {
+            return None;
         }
         (handler == Some(bt::PICT)).then_some(me)
     }

@@ -796,7 +796,9 @@ Named so the demuxer's author knows what is not here:
   present table is distinct from an absent one. `infe` only versions `0`
   through `3`. `iinf`'s
   declared entry count also bounds
-  the `infe` children it exposes, and a truncated `iref` record contributes
+  the `infe` children it exposes, and the item resolver refuses duplicate
+  `item_ID` values before joining table entries. A truncated `iref` record
+  contributes
   no partial item graph edge. A demuxer marks an item `dependent` only after
   its complete TileGrid graph validates. A truncated `iloc` header or
   declared extent
