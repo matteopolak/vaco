@@ -1177,6 +1177,55 @@ bit-for-bit (`crate::interp::tests::partition_matches_the_per_pixel_oracle_at_ev
 `crate::reconstruct::tests::sample_luma_partition_matches_sample_luma_block_for_every_shape_and_edge_case`,
 `crate::reconstruct::tests::partition_rects_recovers_known_shapes`).
 
+### Full-pel fast-path measurement gate
+
+`luma_qpel_partition` currently gathers the full `(w + 5) x (h + 5)` halo
+before it observes the `(frac_x, frac_y) == (0, 0)` full-pel case. A proposed
+fast path may copy only the `w x h` output region, but only after a fresh quiet
+profile attributes material cost to this callee. The semantic oracle remains
+the existing per-pixel comparison; its full-pel case must continue to cover
+interior and edge-clamped positions.
+
+`scripts/perf-h264-fullpel.py` is the exact end-to-end gate for this candidate.
+It is deliberately build-agnostic: give it separately built baseline and
+candidate binaries plus the same ffmpeg-generated H.264 fixture. It streams
+rawvideo into independent byte counters and SHA-256 digests rather than writing
+frames to disk. It refuses a non-quiet lane, checks baseline/candidate/ffmpeg
+identity at threads `1,2,4,8`, then runs 12 rotated baseline/candidate/ffmpeg
+rounds at each count and records wall and child CPU seconds with paired ratios.
+
+```sh
+python3 scripts/perf-h264-fullpel.py \
+  --fixture "$E2E_DIR/h264_4k.mp4" \
+  --baseline /private/tmp/vaco-h264-baseline/dist/vaco \
+  --candidate /private/tmp/vaco-h264-candidate/dist/vaco \
+  --max-load 2 --out /private/tmp/h264-fullpel.json
+```
+
+The required profile is a separate pre-edit Samply capture of the baseline
+binary. `perf-baseline-profile-run.sh` expects its symbolicator beside its
+scratch output, so the reproducible command is:
+
+```sh
+PROFILE=/private/tmp/h264-fullpel-profile
+mkdir -p "$PROFILE"
+cp scripts/perf-baseline-symbolicate.py "$PROFILE/symbolicate.py"
+dsymutil /private/tmp/vaco-h264-baseline/dist/vaco -o "$PROFILE/vaco.dSYM"
+SCRATCH="$PROFILE" VACO_BIN=/private/tmp/vaco-h264-baseline/dist/vaco \
+VACO_DSYM="$PROFILE/vaco.dSYM/Contents/Resources/DWARF/vaco" \
+  scripts/perf-baseline-profile-run.sh baseline h264-fullpel -- \
+  -threads 1 -i "$E2E_DIR/h264_4k.mp4" -map 0:v:0 -c:v rawvideo -f null -
+```
+
+Cachegrind evidence must be collected through `scripts/perf-icount.py` on its
+supported Linux path: it must be deterministic, show the affected callee and
+whole-process `Ir` lower, and never be treated as a hardware-cycle result.
+Generate one specification per Vaco binary, run each with `--repeats 2 --top
+30`, and compare the two JSON files' `h264_decode_sd_640x480` `vaco` records.
+Real cycles are optional and only valid through the strict Linux
+`scripts/perf-hwcycles.py` gate; a missing PMU is reported as unavailable, not
+estimated from time.
+
 Measured: ~6% faster at `-threads 1`, ~8% at `-threads 4` (median
 CPU-seconds ratio, `h264_4k.mp4`, interleaved before/after) — a real,
 reproducible win, but well under this item's own realistic ceiling
