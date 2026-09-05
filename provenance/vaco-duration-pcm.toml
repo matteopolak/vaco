@@ -1,0 +1,13 @@
+[[source]]
+id = "pcm-duration-oracle"
+kind = "blackbox"
+title = "ffmpeg/ffprobe 9.0.1 exact sample-clock durations for the committed one-frame 44100 Hz AIFF and CAF fixtures"
+acquired = "2026-09-04"
+where = "Installed ffprobe -count_packets -show_entries stream=codec_name,sample_rate,channels,time_base,duration_ts,nb_frames,nb_read_packets and -show_packets; ffmpeg -i fixture -f s16le -"
+
+# CAF: 2177 bytes, SHA256 da09396c3534eaf280f0cd82fc4079fbf661d9f625e33b98b68f029930d5dab1.
+# It was generated with ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono
+# -frames:a 1 -c:a pcm_s16le -f caf caf_44100_one_frame.caf.
+# Both files decode to 1024 mono s16 samples (2048 zero bytes), SHA256
+# e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad.
+# CAF reports one 2048-byte packet at byte129, PTS/DTS0, duration1024 at1/44100.

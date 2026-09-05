@@ -362,12 +362,7 @@ impl RawPcmDemuxer {
     pub fn duration(&self) -> Option<Duration> {
         let bytes = self.total_data_bytes()?;
         let frames = frames_in(bytes, self.bytes_per_frame);
-        let micros = frames.checked_mul(1_000_000)?.checked_div(u64::from(
-            self.stream.params.audio.as_ref()?.sample_rate.max(1),
-        ))?;
-        Some(Duration::from_micros(
-            i64::try_from(micros).unwrap_or(i64::MAX),
-        ))
+        Duration::from_ticks(i64::try_from(frames).ok()?, self.stream.time_base)
     }
 
     /// Read one packet.
@@ -435,15 +430,10 @@ impl RawPcmDemuxer {
         if whole_frames == 0 {
             self.eof = true;
         }
-        if let Some(audio) = self.stream.params.audio.as_ref() {
-            let rate = u64::from(audio.sample_rate.max(1));
-            let micros = whole_frames
-                .saturating_mul(1_000_000)
-                .checked_div(rate)
-                .unwrap_or(0);
-            pkt.duration =
-                vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
-        }
+        pkt.duration = i64::try_from(whole_frames)
+            .ok()
+            .and_then(|ticks| Duration::from_ticks(ticks, self.stream.time_base))
+            .unwrap_or(Duration::ZERO);
         self.frames_emitted = self.frames_emitted.saturating_add(whole_frames.max(1));
         Ok(pkt)
     }
