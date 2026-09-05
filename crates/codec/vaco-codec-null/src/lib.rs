@@ -1,25 +1,6 @@
-//! The reference's `vnull`/`anull` null encoders.
-//!
-//! `vnull` ("Null video codec") and `anull` ("Null audio codec") discard
-//! every frame sent in and never produce a packet, so a pipeline can be
-//! built and run end to end — timing, muxer wiring, `-f null -` throughput
-//! measurement — without a real codec doing any work. Encode-only: there is
-//! nothing to decode, so this crate registers no
-//! [`vaco_codec_core::DecoderDesc`].
-//!
-//! [`NullEncoder`] is the one implementation both `-c:v vnull` and
-//! `-c:a anull` share (the reference's two dummy encoders differ only in
-//! media type and name). It follows the same `SendReceive`-over-`Machine`
-//! shape every codec in this tree uses, except `send` never calls
-//! [`vaco_codec_core::machine::Machine::emit`] on the `Accept::Input`
-//! branch — it just accepts and discards, the same shape
-//! `vaco_codec_core::mock`'s `Step::Skip` already exercises in that
-//! module's property tests. [`vaco_codec_core::Validated`] wraps it like
-//! every other encoder here.
-//!
-//! No configuration: `Limits` is accepted at construction (every
-//! `EncoderDesc::make` signature takes one) but nothing here allocates, so
-//! nothing needs bounding.
+//! Encode-only `vnull` and `anull` codecs that discard every frame and emit no
+//! packets, allowing pipeline wiring and timing to be exercised without a
+//! real codec.
 
 #![forbid(unsafe_code)]
 
@@ -39,9 +20,7 @@ pub struct NullEncoder {
 }
 
 impl NullEncoder {
-    /// A fresh null encoder. There is no per-instance state worth carrying,
-    /// so unlike every other codec in this tree there is no `Limits` to
-    /// store — nothing here allocates.
+    /// Constructs a null encoder with no per-instance state.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -65,18 +44,12 @@ impl SendReceive for NullEncoder {
     }
 
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
-        // Step one, always, exactly like every other codec: let the machine
-        // validate the transition and apply backpressure.
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
                 self.machine.finish();
                 Ok(())
             }
-            // The one line that makes this a null codec: the frame is
-            // dropped here, not forwarded to `self.machine.emit`. Every
-            // other codec's `Accept::Input` arm ends in an `emit` call; this
-            // one deliberately does not, mirroring `vaco_codec_core::mock`'s
-            // `Step::Skip`.
+            // Null codecs intentionally accept and discard input frames.
             Accept::Input => Ok(()),
         }
     }
@@ -184,8 +157,6 @@ mod tests {
         enc.send(None).expect("drain");
         assert!(matches!(enc.receive(), Err(Error::Eof)));
         enc.flush();
-        // After a flush the machine is back at the start, so sending again
-        // must not immediately answer `Eof`.
         enc.send(Some(&dummy_frame())).expect("send after flush");
         assert!(matches!(enc.receive(), Err(Error::NeedMoreInput)));
     }
