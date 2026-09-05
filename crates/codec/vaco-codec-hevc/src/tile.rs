@@ -35,6 +35,7 @@ pub struct TileCabacState<'a> {
     contexts: ContextBank,
     first_ctb_split: Option<bool>,
     first_ctb_child_split: Option<bool>,
+    first_ctb_grandchild_split: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -184,7 +185,45 @@ impl TileCabacState<'_> {
             .ok_or(Error::InvalidData(
                 "vaco-codec-hevc: split_cu_flag context is missing",
             ))?;
-        Ok(self.cabac.decode_decision(context) != 0)
+        let split = self.cabac.decode_decision(context) != 0;
+        self.first_ctb_grandchild_split = Some(split);
+        Ok(split)
+    }
+
+    /// Decode the top-left leaf's intra `part_mode` after a grandchild split.
+    ///
+    /// The grandchild's top-left child is a minimum-size coding unit, so its
+    /// `part_mode` is the single context-coded bin from §7.3.8.5. A zero bin
+    /// means `PART_NxN`, and a one bin means `PART_2Nx2N`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] when the grandchild did not
+    /// split, and [`vaco_core::Error::InvalidData`] for inconsistent leaf
+    /// dimensions.
+    pub fn decode_first_ctb_grandchild_leaf_part_mode(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<bool> {
+        if self.first_ctb_grandchild_split != Some(true) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile grandchild leaf parent is not split",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile grandchild leaf dimensions are invalid",
+            ));
+        }
+        let context = self
+            .contexts
+            .part_size
+            .first_mut()
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: part_mode context is missing",
+            ))?;
+        Ok(self.cabac.decode_decision(context) == 0)
     }
 }
 
@@ -451,6 +490,7 @@ impl TileLayout {
                 contexts: ContextBank::new(slice_qp),
                 first_ctb_split: None,
                 first_ctb_child_split: None,
+                first_ctb_grandchild_split: None,
             });
         }
         Ok(states)

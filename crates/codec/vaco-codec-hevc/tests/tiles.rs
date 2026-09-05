@@ -303,6 +303,27 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         (first_grandchild_split, second_grandchild_split),
         (true, false)
     );
+    let first_leaf_is_nxn = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_grandchild_leaf_part_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile grandchild leaf carries part_mode");
+    assert!(first_leaf_is_nxn);
+    let second_leaf_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_grandchild_leaf_part_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("unsplit second grandchild has no leaf part_mode");
+    assert!(matches!(
+        second_leaf_error,
+        Error::Unsupported("vaco-codec-hevc: first tile grandchild leaf parent is not split")
+    ));
     let cabac = layout
         .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
         .expect("first tile CABAC state initializes");
