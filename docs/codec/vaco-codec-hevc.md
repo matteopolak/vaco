@@ -972,7 +972,8 @@ SAO and deblocking off. The test first parses the PPS and asserts
 then checks the 8-CTB raster map (`0..3 -> tile 0`, `4..7 -> tile 1`) and the
 cross-column neighbour boundary. It also checks that the picture has two
 tile-local substreams, one entry-point offset, and that tile-local CTB
-addresses reset at the column boundary. It also parses the real slice header
+addresses reset at the column boundary and that each tile's first CTB starts a
+fresh tile-local CABAC state. It also parses the real slice header
 and maps its one coded-byte entry-point length to the two half-open tile-scan
 ranges. Finally it sends the same access unit to `HevcDecoder` and requires
 exactly

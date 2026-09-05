@@ -169,6 +169,18 @@ impl TileLayout {
         Some((tile_id, local_address))
     }
 
+    /// Whether CTB `(x, y)` starts a fresh tile-local CABAC substream.
+    ///
+    /// For tiles-only slices, §9.3.1.2 initializes arithmetic decoding at the
+    /// first CTB of each tile substream; later CTBs continue that tile's state.
+    /// This reports the state boundary without constructing a context bank or
+    /// permitting the still-refused reconstruction path to consume bytes.
+    #[must_use]
+    pub fn starts_new_tile_cabac_substream(&self, x: u32, y: u32) -> bool {
+        self.tile_local_ctb_address(x, y)
+            .is_some_and(|(_, local_address)| local_address == 0)
+    }
+
     /// Whether two CTBs share one tile, with out-of-picture coordinates
     /// treated as unavailable rather than as a tile match.
     #[must_use]

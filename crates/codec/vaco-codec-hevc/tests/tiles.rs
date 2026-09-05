@@ -91,6 +91,10 @@ fn tile_pps_maps_raster_ctbs_and_blocks_cross_tile_neighbours() {
     assert_eq!(layout.tile_local_ctb_address(3, 0), Some((0, 3)));
     assert_eq!(layout.tile_local_ctb_address(4, 0), Some((1, 0)));
     assert_eq!(layout.tile_local_ctb_address(7, 0), Some((1, 3)));
+    assert!(layout.starts_new_tile_cabac_substream(0, 0));
+    assert!(!layout.starts_new_tile_cabac_substream(3, 0));
+    assert!(layout.starts_new_tile_cabac_substream(4, 0));
+    assert!(!layout.starts_new_tile_cabac_substream(7, 0));
     assert!(layout.left_available(1, 0));
     assert!(!layout.left_available(4, 0));
     assert!(layout.left_available(5, 0));
