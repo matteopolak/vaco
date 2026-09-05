@@ -489,6 +489,7 @@ fn decode_frame(
     tile_group_payload: &[u8],
     budget: &mut Budget,
 ) -> Result<Frame> {
+    fh.restoration.check_scope()?;
     let mi_cols = 2 * ((fh.size.coded_width + 7) >> 3);
     let mi_rows = 2 * ((fh.size.coded_height + 7) >> 3);
     let (mi_cols, mi_rows) = (mi_cols as usize, mi_rows as usize);

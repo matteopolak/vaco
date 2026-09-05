@@ -49,8 +49,8 @@
 //! specification's own §9.4 listing via `scripts/extract_cdf.py` rather
 //! than retyped, and cross-checked by this crate's own tests rather than
 //! against another implementation — a second transcription of the same
-//! table is not an independent check. dav1d and libaom were not consulted,
-//! to preserve this crate's clean-room provenance.
+//! table is not an independent check. The restoration module additionally uses
+//! pinned BSD-licensed dav1d scalar output as its independent test oracle.
 #![forbid(unsafe_code)]
 
 pub mod cdf;
@@ -58,6 +58,7 @@ pub mod decode;
 pub mod frame_header;
 pub mod framebuf;
 pub mod predict;
+pub mod restoration;
 pub mod symbol;
 pub mod tables;
 pub mod transform;

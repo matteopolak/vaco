@@ -1,0 +1,15 @@
+[[source]]
+id = "dav1d-restoration-oracle"
+title = "Observed output of dav1d scalar loop restoration at aa09a630ef57ee7d9482ffb7ef355a903dbb5302"
+kind = "blackbox"
+acquired = "2026-09-04"
+where = "https://github.com/videolan/dav1d/tree/aa09a630ef57ee7d9482ffb7ef355a903dbb5302"
+license = "BSD-2-Clause"
+notes = "Independent test oracle only: src/looprestoration_tmpl.c, src/tables.c and required headers. Adapter in provenance/vaco-codec-av1-restoration-oracle.c. Production arithmetic derived from aom-av1-spec sections 7.17.1-7.17.6."
+
+[[table]]
+name = "SGR_PARAMS"
+file = "crates/codec/vaco-codec-av1/src/restoration.rs"
+source = "aom-av1-spec"
+clause = "7.17.3, Sgr_Params: radius and epsilon pairs"
+method = "transcribed"

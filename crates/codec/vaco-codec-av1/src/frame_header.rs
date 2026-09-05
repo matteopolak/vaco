@@ -26,6 +26,7 @@
 //!
 //! `Vaco-Spec-Ref: aom-av1-spec §5.9 (frame header OBU syntax)`.
 
+use crate::restoration::{FrameRestoration, RestorationType};
 use vaco_bitstream::BitReader;
 use vaco_core::{Error, Result};
 use vaco_parse_av1::leb::{ns, su};
@@ -187,6 +188,8 @@ pub struct FrameHeader {
     pub lossless_array: [bool; MAX_SEGMENTS],
     pub tx_mode: TxMode,
     pub reduced_tx_set: bool,
+    /// Retained plane modes and unit sizes from `lr_params()`, §5.9.20.
+    pub restoration: FrameRestoration,
     /// `cdef_bits`, §5.9.19 — how many literal bits `read_cdef()`
     /// (§5.11.56) draws per 64x64 unit in the tile data itself. `0` when
     /// CDEF is off for this frame (`coded_lossless`, `allow_intrabc`, or
@@ -420,7 +423,7 @@ fn parse_inner(
 
     parse_loop_filter_params(r, seq, coded_lossless, allow_intrabc, num_planes);
     let cdef_bits = parse_cdef_params(r, seq, coded_lossless, allow_intrabc, num_planes);
-    parse_lr_params(r, seq, all_lossless, allow_intrabc, num_planes);
+    let restoration = parse_lr_params(r, seq, all_lossless, allow_intrabc, num_planes);
 
     let tx_mode = if coded_lossless {
         TxMode::Only4x4
@@ -455,6 +458,7 @@ fn parse_inner(
         lossless_array,
         tx_mode,
         reduced_tx_set,
+        restoration,
         cdef_bits,
     })
 }
@@ -826,14 +830,23 @@ fn parse_lr_params(
     all_lossless: bool,
     allow_intrabc: bool,
     num_planes: u32,
-) {
+) -> FrameRestoration {
+    let mut params = FrameRestoration::default();
     if all_lossless || allow_intrabc || !seq.enable_restoration {
-        return;
+        return params;
     }
     let mut uses_lr = false;
     let mut uses_chroma_lr = false;
     for plane in 0..num_planes {
         let lr_type = r.get(2);
+        if let Some(mode) = params.types.get_mut(plane as usize) {
+            *mode = match lr_type {
+                1 => RestorationType::Switchable,
+                2 => RestorationType::Wiener,
+                3 => RestorationType::SelfGuided,
+                _ => RestorationType::None,
+            };
+        }
         if lr_type != 0 {
             uses_lr = true;
             if plane > 0 {
@@ -850,11 +863,16 @@ fn parse_lr_params(
         } else {
             lr_unit_shift
         };
-        let _ = lr_unit_shift;
-        if seq.color_config.subsampling_x && seq.color_config.subsampling_y && uses_chroma_lr {
-            let _lr_uv_shift = r.get_bit();
-        }
+        let size = 64usize << lr_unit_shift;
+        let uv_shift =
+            if seq.color_config.subsampling_x && seq.color_config.subsampling_y && uses_chroma_lr {
+                r.get_bit()
+            } else {
+                0
+            };
+        params.unit_size = [size, size >> uv_shift, size >> uv_shift];
     }
+    params
 }
 
 fn parse_film_grain_params(
@@ -964,6 +982,58 @@ mod tests {
         ];
         let mut b = Budget::new(Limits::strict());
         SequenceHeader::parse(&payload, &mut b).expect("a real sequence header parses")
+    }
+
+    #[test]
+    fn restoration_header_retains_remapped_modes_and_subsampled_unit_sizes() {
+        let mut seq = seq_header();
+        seq.enable_restoration = true;
+        seq.use_128x128_superblock = false;
+        seq.color_config.subsampling_x = true;
+        seq.color_config.subsampling_y = true;
+        // Y=Wiener, U=SGR, V=switchable; unit shift=2, UV shift=1.
+        let mut bits = BitReader::new(&[0b1011_0111, 0b1000_0000]);
+        let params = parse_lr_params(&mut bits, &seq, false, false, 3);
+        assert_eq!(
+            params.types,
+            [
+                RestorationType::Wiener,
+                RestorationType::SelfGuided,
+                RestorationType::Switchable
+            ]
+        );
+        assert_eq!(params.unit_size, [256, 128, 128]);
+        assert_eq!(bits.bit_pos(), 9);
+        assert!(params.check_scope().is_err());
+
+        seq.use_128x128_superblock = true;
+        // Y=Wiener; the 128x128-superblock branch consumes only one shift bit.
+        let mut bits = BitReader::new(&[0b1000_0000]);
+        let params = parse_lr_params(&mut bits, &seq, false, false, 1);
+        assert_eq!(params.unit_size, [128; 3]);
+        assert_eq!(bits.bit_pos(), 3);
+    }
+
+    #[test]
+    fn disabled_restoration_consumes_no_bits_and_none_modes_consume_no_size() {
+        let mut seq = seq_header();
+        seq.enable_restoration = true;
+        for (lossless, intrabc, enabled) in [
+            (true, false, true),
+            (false, true, true),
+            (false, false, false),
+        ] {
+            seq.enable_restoration = enabled;
+            let mut bits = BitReader::new(&[255]);
+            let params = parse_lr_params(&mut bits, &seq, lossless, intrabc, 3);
+            assert!(params.check_scope().is_ok());
+            assert_eq!(bits.bit_pos(), 0);
+        }
+        seq.enable_restoration = true;
+        let mut bits = BitReader::new(&[0]);
+        let params = parse_lr_params(&mut bits, &seq, false, false, 3);
+        assert!(params.check_scope().is_ok());
+        assert_eq!(bits.bit_pos(), 6);
     }
 
     #[test]
