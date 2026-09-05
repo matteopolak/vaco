@@ -823,6 +823,8 @@ crate decides what becomes a stream:
   boxes in both worlds. A malformed present `ipma` table, including an index
   beyond its `ipco` property list, a duplicate ID, or a descending ID refuses
   the item file rather than applying a partial property configuration. A
+  non-essential zero `property_index` explicitly associates no property and
+  is ignored; zero with the essential bit set is malformed. A
   supported HEIF item FullBox also has to use its declared version and flags:
   `iinf`, `pitm`, `iloc`, and `iref` have no flags; `ipma` permits only
   `large_index`; and `infe` permits only `hidden_item`. A reserved header bit

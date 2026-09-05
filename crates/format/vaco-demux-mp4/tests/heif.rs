@@ -549,6 +549,25 @@ fn a_truncated_property_association_table_refuses_the_item_file() {
 }
 
 #[test]
+fn a_nonessential_zero_property_association_keeps_the_item_file_readable() {
+    let mut bytes = heif();
+    let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
+    // Item 4's only association is a non-essential `ispe`. In `ipma`, index
+    // zero explicitly means no associated property, so it must not invalidate
+    // the otherwise readable item file.
+    bytes[ipma + 28] = 0;
+    let demux = open(bytes);
+    assert_eq!(
+        demux
+            .streams()
+            .iter()
+            .map(|stream| stream.id)
+            .collect::<Vec<_>>(),
+        vec![Some(1), Some(2), Some(4)]
+    );
+}
+
+#[test]
 fn an_out_of_range_property_association_refuses_the_item_file() {
     let mut bytes = heif();
     let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();

@@ -349,10 +349,12 @@ pub fn parse_ipma(iprp: &IsoBox<'_>) -> Option<Vec<ItemPropertyAssociation>> {
                 let v = r.u8();
                 (v & 0x80 != 0, u16::from(v & 0x7F))
             };
-            if index == 0 {
+            if index == 0 && essential {
                 return None;
             }
-            properties.push((essential, index));
+            if index != 0 {
+                properties.push((essential, index));
+            }
         }
         if r.overrun() {
             return None;
@@ -951,14 +953,33 @@ mod tests {
     }
 
     #[test]
-    fn ipma_refuses_a_zero_property_index() {
-        // `property_index` is one-based. Silently skipping zero would let an
-        // item reach the demuxer with an incomplete property configuration.
+    fn ipma_accepts_a_nonessential_zero_property_index() {
+        // §9.3.3 reserves zero for an association that names no property;
+        // only its essential indicator has to remain clear.
         let body = [
             0, 0, 0, 1, // entry_count
             0, 1, // item_id
             1, // association_count
             0, // property_index
+        ];
+        let ipma = fullbx(b"ipma", 0, 0, &body);
+        let raw = bx(b"iprp", &ipma);
+        assert_eq!(
+            parse_ipma(&first_box(&raw)),
+            Some(vec![ItemPropertyAssociation {
+                item_id: 1,
+                properties: Vec::new(),
+            }])
+        );
+    }
+
+    #[test]
+    fn ipma_refuses_an_essential_zero_property_index() {
+        let body = [
+            0, 0, 0, 1, // entry_count
+            0, 1,    // item_id
+            1,    // association_count
+            0x80, // essential indicator with no property
         ];
         let ipma = fullbx(b"ipma", 0, 0, &body);
         let raw = bx(b"iprp", &ipma);
