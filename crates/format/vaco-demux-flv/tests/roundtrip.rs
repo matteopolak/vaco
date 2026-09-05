@@ -118,6 +118,40 @@ fn streams_are_discovered_progressively_with_metadata_applied() {
 }
 
 #[test]
+fn amf_duration_retains_the_double_value_as_an_exact_decimal_seconds_ratio() {
+    let mut bytes = build_flv();
+    let old = 1.5_f64.to_be_bytes();
+    let new = 1.000_000_007_f64.to_be_bytes();
+    let at = bytes
+        .windows(old.len())
+        .position(|window| window == old)
+        .expect("metadata fixture duration");
+    bytes[at..at + new.len()].copy_from_slice(&new);
+    let demux = open(bytes);
+    assert_eq!(
+        demux.duration().map(vaco_core::Duration::as_ratio),
+        Some((1_000_000_007, 1_000_000_000))
+    );
+}
+
+#[test]
+fn amf_duration_keeps_a_scientific_submicrosecond_double() {
+    let mut bytes = build_flv();
+    let old = 1.5_f64.to_be_bytes();
+    let new = 1e-7_f64.to_be_bytes();
+    let at = bytes
+        .windows(old.len())
+        .position(|window| window == old)
+        .expect("metadata fixture duration");
+    bytes[at..at + new.len()].copy_from_slice(&new);
+    let demux = open(bytes);
+    assert_eq!(
+        demux.duration().map(vaco_core::Duration::as_ratio),
+        Some((1, 10_000_000))
+    );
+}
+
+#[test]
 fn sequence_headers_become_extradata_not_packets() {
     let mut demux = open(build_flv());
     let mut packets = Vec::new();

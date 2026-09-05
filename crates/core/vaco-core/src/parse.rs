@@ -370,7 +370,7 @@ pub fn format_rational(r: Rational) -> String {
 
 const US_PER_S: i128 = 1_000_000;
 
-/// `"12:34:56.789"`, `"-1:02.5"`, `"1234.5"`, `"5ms"`, `"2s"`. Microseconds.
+/// `"12:34:56.789"`, `"-1:02.5"`, `"1234.5"`, `"5ms"`, `"2s"`. Exact seconds.
 ///
 /// Two shapes, per research 05 §5.6: `[-][HH:]MM:SS[.m…]` — at most three
 /// colon-separated columns, only the last of which may carry a fraction — or
@@ -389,7 +389,7 @@ pub fn duration(s: &str) -> Option<Duration> {
         return None;
     }
 
-    let us: i128 = if rest.contains(':') {
+    let value = if rest.contains(':') {
         let parts: Vec<&str> = rest.split(':').collect();
         if parts.len() > 3 || parts.iter().any(|p| p.is_empty()) {
             return None;
@@ -405,39 +405,34 @@ pub fn duration(s: &str) -> Option<Duration> {
             }
             whole = whole.checked_mul(60)?.checked_add(v)?;
         }
-        whole
-            .checked_mul(60)?
-            .checked_mul(US_PER_S)?
-            .checked_add(seconds_us(parts.get(last)?)?)?
+        let (seconds, scale) = decimal(parts.get(last)?)?;
+        let whole = whole.checked_mul(60)?;
+        let numerator = whole.checked_mul(scale)?.checked_add(seconds)?;
+        Duration::from_fraction(numerator, scale)?
     } else {
-        let (body, scale) = if let Some(b) = rest.strip_suffix("ms") {
+        let (body, unit_denominator) = if let Some(b) = rest.strip_suffix("ms") {
             (b, 1_000i128)
         } else if let Some(b) = rest.strip_suffix("us") {
-            (b, 1i128)
+            (b, 1_000_000i128)
         } else if let Some(b) = rest.strip_suffix('s') {
-            (b, US_PER_S)
+            (b, 1i128)
         } else {
-            (rest, US_PER_S)
+            (rest, 1i128)
         };
-        scaled_us(body, scale)?
+        let (numerator, denominator) = decimal(body)?;
+        Duration::from_fraction(numerator, denominator.checked_mul(unit_denominator)?)?
     };
 
-    let us = if neg { -us } else { us };
-    i64::try_from(us).ok().map(Duration::from_micros)
+    if neg {
+        let (numerator, denominator) = value.as_ratio();
+        Duration::from_fraction(numerator.checked_neg()?, denominator)
+    } else {
+        Some(value)
+    }
 }
 
-/// Parse a bare seconds column (`"56.789"`) into microseconds.
-fn seconds_us(s: &str) -> Option<i128> {
-    scaled_us(s, US_PER_S)
-}
-
-/// Parse a decimal into `unit`-scaled microseconds without going through `f64`,
-/// so the result is exact for every representable input.
-#[allow(
-    clippy::integer_division,
-    reason = "the divisor is the literal 10; this is decimal place-value, not a computed quotient"
-)]
-fn scaled_us(s: &str, unit_us: i128) -> Option<i128> {
+/// Parse a non-negative base-10 decimal as an exact numerator and denominator.
+fn decimal(s: &str) -> Option<(i128, i128)> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
         return None;
     }
@@ -450,20 +445,16 @@ fn scaled_us(s: &str, unit_us: i128) -> Option<i128> {
     } else {
         int_part.parse().ok()?
     };
-    let mut total = whole.checked_mul(unit_us)?;
-    if !frac_part.is_empty() {
-        // Scale the fraction by `unit_us` exactly: value = frac / 10^len * unit.
-        let mut scale = unit_us;
-        for c in frac_part.chars() {
-            let d = i128::from(c.to_digit(10)?);
-            scale /= 10;
-            total = total.checked_add(d.checked_mul(scale)?)?;
-            if scale == 0 {
-                break;
-            }
-        }
-    }
-    Some(total)
+    let fraction = if frac_part.is_empty() {
+        0
+    } else {
+        frac_part.parse::<i128>().ok()?
+    };
+    let denominator = (0..frac_part.len()).try_fold(1_i128, |scale, _| scale.checked_mul(10))?;
+    Some((
+        whole.checked_mul(denominator)?.checked_add(fraction)?,
+        denominator,
+    ))
 }
 
 /// The canonical rendering: signed seconds with exactly six decimals.

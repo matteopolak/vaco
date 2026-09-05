@@ -40,6 +40,10 @@ the tags that would otherwise have to state them — `demux::PendingMeta`
 caches those fields and `ensure_video_stream` applies them when the stream is
 actually created.
 
+AMF0 stores `duration` as an `f64`. The demuxer converts its shortest
+round-tripping decimal spelling directly into an exact `Duration`; it does not
+round the value to microseconds on ingress.
+
 ### Timestamps
 
 Trivial by container standards: every tag states its own presentation

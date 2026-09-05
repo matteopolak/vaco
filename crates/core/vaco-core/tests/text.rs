@@ -274,7 +274,10 @@ fn duration_grammar() {
     // Exact decimal scaling: 0.1 s is 100000 us, not 99999.
     assert_eq!(parse::duration("0.1"), Some(Duration::from_micros(100_000)));
     assert_eq!(parse::duration("0.000001"), Some(Duration::from_micros(1)));
-    assert_eq!(parse::duration("0.0000001"), Some(Duration::from_micros(0)));
+    assert_eq!(
+        parse::duration("0.0000001").map(Duration::as_ratio),
+        Some((1, 10_000_000))
+    );
     assert_eq!(parse::duration(""), None);
     assert_eq!(parse::duration("1:2:3:4"), None);
     assert_eq!(parse::duration("::"), None);

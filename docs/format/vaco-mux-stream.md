@@ -129,7 +129,8 @@ Measured (`ffmpeg -f concat -safe 0 -i list.txt …`):
   (`Line {n}: option not allowed if safe`, verbatim).
 * `duration`/`inpoint`/`outpoint` accept both `SS[.frac]` and
   `HH:MM:SS[.frac]`, via `vaco_core::parse::duration` (the CLI's own
-  grammar for this shape).
+  grammar for this shape). Decimal digits beyond six are retained as an exact
+  ratio; formatting for display is the only microsecond rounding boundary.
 * An absolute path (or one containing `..`) is rejected as `Unsafe file
   name '<path>'` unless `-safe 0`.
 

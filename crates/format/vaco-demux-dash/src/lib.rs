@@ -286,13 +286,9 @@ impl DashDemuxer {
         let base_url =
             vaco_format_adaptive::resolve(&base_url, aset.base_url.as_deref().unwrap_or(""));
 
-        let period_end_seconds = period
-            .duration
-            .or(mpd.media_presentation_duration)
-            .map(|d| d.as_micros() as f64 / 1_000_000.0);
+        let period_end = period.duration.or(mpd.media_presentation_duration);
 
-        let (init, seg_list) =
-            segments::enumerate(rep, &base_url, period_end_seconds, &mut budget)?;
+        let (init, seg_list) = segments::enumerate(rep, &base_url, period_end, &mut budget)?;
         let hint = representation_hint(rep);
         let content_protection = aset.content_protection.clone();
 

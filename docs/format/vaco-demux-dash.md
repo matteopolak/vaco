@@ -38,6 +38,8 @@ SegmentTimeline tick counts retain their declared timescale as exact rational
 durations. Aggregate duration and segment seeking add and compare those
 values directly, so a `1/10000000`-second segment is not lost through a
 floating-point or microsecond intermediate.
+The `r="-1"` endpoint and template segment count likewise rescale the exact
+period duration to timeline ticks, preserving a final sub-microsecond segment.
 
 ### Continuity is free here, unlike HLS
 

@@ -338,6 +338,15 @@ mod tests {
     }
 
     #[test]
+    fn directives_keep_decimal_digits_beyond_microseconds() {
+        let script = parse("file 'a.ts'\nduration 1.000000007\n", true).unwrap();
+        assert_eq!(
+            script.lines[1].directive,
+            Directive::Duration(Duration::from_fraction(1_000_000_007, 1_000_000_000).unwrap())
+        );
+    }
+
+    #[test]
     fn a_bad_duration_is_a_named_error() {
         let err = parse("file 'a.ts'\nduration not-a-time\n", true).unwrap_err();
         assert_eq!(

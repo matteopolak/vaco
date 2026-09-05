@@ -123,6 +123,11 @@ seconds across track clocks. Keep native ticks through that comparison: a
 microsecond intermediate loses 44.1 kHz audio and NTSC periods even when every
 sample-table count is correct. Display formatting rounds only at the sink.
 
+The synthetic `attached_pic` cover-art stream receives that same aggregate
+duration by direct rational rescaling into its `1/90000` clock. It must not
+pass through a microsecond timestamp first, because that changes edge-case
+rounding at the cover stream's tick boundary.
+
 > `duration_ts = min(non-empty elst total rescaled, min(mdhd.duration, Σ sample durations))`
 
 | File | `mdhd` | Σ `stts` | `elst` → media | `duration_ts` |

@@ -119,7 +119,7 @@ struct PendingMeta {
     width: Option<u32>,
     height: Option<u32>,
     frame_rate: Option<f64>,
-    duration_seconds: Option<f64>,
+    duration: Option<Duration>,
 }
 
 /// The FLV demuxer.
@@ -480,9 +480,9 @@ impl FlvDemuxer {
             self.pending_meta.frame_rate = Some(fps);
         }
         if let Some(d) = meta.get("duration").and_then(AmfValue::as_f64) {
-            self.pending_meta.duration_seconds = Some(d);
+            self.pending_meta.duration = flv_duration(d);
             if d.is_finite() && d >= 0.0 {
-                self.duration = Some(Duration::from_micros((d * 1_000_000.0).round() as i64));
+                self.duration = self.pending_meta.duration;
             }
         }
         for (key, out_key) in [
@@ -617,6 +617,52 @@ impl FlvDemuxer {
         })();
         let _ = self.io.seek(start);
         ok
+    }
+}
+
+/// AMF0 supplies a binary float, so retain the shortest decimal that round-trips
+/// to it rather than manufacturing a microsecond intermediate.
+fn flv_duration(seconds: f64) -> Option<Duration> {
+    let decimal = seconds.is_finite().then(|| finite_decimal(seconds))??;
+    Duration::from_decimal_seconds(&decimal)
+}
+
+/// Expand the scientific spelling `f64::to_string` uses for tiny AMF values.
+///
+/// `Duration::from_decimal_seconds` deliberately accepts the playlist grammar,
+/// not an exponent grammar, so this boundary turns the shortest round-tripping
+/// float spelling into the equivalent base-10 decimal before parsing it.
+fn finite_decimal(seconds: f64) -> Option<String> {
+    if seconds < 0.0 {
+        return None;
+    }
+    let text = seconds.to_string();
+    let Some((coefficient, exponent)) = text.split_once(['e', 'E']) else {
+        return Some(text);
+    };
+    let exponent = exponent.parse::<i32>().ok()?;
+    let (whole, fraction) = coefficient.split_once('.').unwrap_or((coefficient, ""));
+    let digits = [whole, fraction].concat();
+    let position = i32::try_from(whole.len()).ok()?.checked_add(exponent)?;
+    let max_digits = 38_i32;
+    if position.unsigned_abs() > u32::try_from(max_digits).ok()?
+        || i32::try_from(digits.len())
+            .ok()?
+            .checked_sub(position)?
+            .unsigned_abs()
+            > u32::try_from(max_digits).ok()?
+    {
+        return None;
+    }
+    if position <= 0 {
+        let zeroes = usize::try_from(position.checked_neg()?).ok()?;
+        Some(format!("0.{}{}", "0".repeat(zeroes), digits))
+    } else if usize::try_from(position).ok()? >= digits.len() {
+        let zeroes = usize::try_from(position).ok()?.checked_sub(digits.len())?;
+        Some(format!("{}{}", digits, "0".repeat(zeroes)))
+    } else {
+        let at = usize::try_from(position).ok()?;
+        Some(format!("{}.{}", digits.get(..at)?, digits.get(at..)?))
     }
 }
 

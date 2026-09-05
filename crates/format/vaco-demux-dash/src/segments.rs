@@ -30,7 +30,8 @@ pub struct InitSegment {
 /// -> Representation, already folded into one string by the caller — see
 /// `crate::demux::effective_base_url`).
 ///
-/// `period_end`, in the template's own timescale ticks, resolves a final
+/// `period_end`, retained as exact seconds until it is converted to the
+/// template's own timescale ticks, resolves a final
 /// `SegmentTimeline` entry's `r="-1"` (see
 /// `vaco_format_adaptive::timeline::expand`); pass `None` for a period with
 /// no stated duration.
@@ -43,7 +44,7 @@ pub struct InitSegment {
 pub fn enumerate(
     representation: &Representation,
     base_url: &str,
-    period_end_seconds: Option<f64>,
+    period_end: Option<Duration>,
     budget: &mut Budget,
 ) -> Result<(Option<InitSegment>, Vec<DashSegment>)> {
     let Addressing {
@@ -53,7 +54,7 @@ pub fn enumerate(
     } = &representation.addressing;
 
     if let Some(t) = template {
-        return enumerate_template(representation, t, base_url, period_end_seconds, budget);
+        return enumerate_template(representation, t, base_url, period_end, budget);
     }
     if let Some(l) = list {
         return Ok(enumerate_list(representation, l, base_url));
@@ -74,7 +75,7 @@ fn enumerate_template(
     representation: &Representation,
     template: &crate::mpd::SegmentTemplate,
     base_url: &str,
-    period_end_seconds: Option<f64>,
+    period_end: Option<Duration>,
     budget: &mut Budget,
 ) -> Result<(Option<InitSegment>, Vec<DashSegment>)> {
     let timescale = template.timescale.max(1);
@@ -97,8 +98,11 @@ fn enumerate_template(
 
     let timings: Vec<vaco_format_adaptive::SegmentTiming> =
         if let Some(entries) = &template.timeline {
-            let period_end = period_end_seconds.map(|s| (s * timescale as f64) as u64);
-            vaco_format_adaptive::expand(entries, period_end, budget)?
+            vaco_format_adaptive::expand(
+                entries,
+                period_end.and_then(|d| duration_to_ticks(d, timescale)),
+                budget,
+            )?
         } else {
             // No SegmentTimeline: segments are `duration` ticks apart, from
             // `startNumber`, for as many as the period's stated length allows.
@@ -108,10 +112,12 @@ fn enumerate_template(
             let Some(dur) = template.duration else {
                 return Ok((init, Vec::new()));
             };
-            let Some(period_secs) = period_end_seconds else {
+            let Some(period_end) = period_end else {
                 return Ok((init, Vec::new()));
             };
-            let total_ticks = (period_secs * timescale as f64) as u64;
+            let Some(total_ticks) = duration_to_ticks(period_end, timescale) else {
+                return Ok((init, Vec::new()));
+            };
             let count = total_ticks.div_ceil(dur.max(1));
             budget.consume_fuel(count)?;
             (0..count)
@@ -208,6 +214,19 @@ fn ticks_to_duration(ticks: u64, timescale: u64) -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
+/// Convert a positive exact duration to DASH ticks with the legacy truncation
+/// policy, without first rounding it to microseconds.
+fn duration_to_ticks(duration: Duration, timescale: u64) -> Option<u64> {
+    let (numerator, denominator) = duration.as_ratio();
+    if numerator < 0 {
+        return None;
+    }
+    let ticks = numerator
+        .checked_mul(i128::from(timescale))?
+        .checked_div(denominator)?;
+    u64::try_from(ticks).ok()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
@@ -278,10 +297,73 @@ mod tests {
             ..Addressing::default()
         });
         let mut b = Budget::new(Limits::permissive());
-        let (_, segs) = enumerate(&r, "http://a/", Some(6.0), &mut b).unwrap();
+        let (_, segs) = enumerate(
+            &r,
+            "http://a/",
+            Some(Duration::from_micros(6_000_000)),
+            &mut b,
+        )
+        .unwrap();
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].uri, "http://a/c-001.m4s");
         assert_eq!(segs[2].uri, "http://a/c-003.m4s");
+    }
+
+    #[test]
+    fn timeline_negative_repeat_uses_an_exact_submicrosecond_period_end() {
+        let template = SegmentTemplate {
+            media: Some("s-$Time$.m4s".to_owned()),
+            initialization: None,
+            timescale: 28_224_000,
+            duration: None,
+            start_number: 1,
+            timeline: Some(vec![TimelineEntry {
+                t: Some(0),
+                d: 1,
+                r: Some(-1),
+            }]),
+        };
+        let r = rep(Addressing {
+            template: Some(template),
+            ..Addressing::default()
+        });
+        let mut b = Budget::new(Limits::permissive());
+        let (_, segs) = enumerate(
+            &r,
+            "http://a/",
+            Some(Duration::from_fraction(7, 28_224_000).unwrap()),
+            &mut b,
+        )
+        .unwrap();
+        assert_eq!(segs.len(), 7);
+        assert_eq!(segs[6].uri, "http://a/s-6.m4s");
+        assert_eq!(segs[0].duration.as_ratio(), (1, 28_224_000));
+    }
+
+    #[test]
+    fn template_count_uses_an_exact_submicrosecond_period_end() {
+        let template = SegmentTemplate {
+            media: Some("s-$Number$.m4s".to_owned()),
+            initialization: None,
+            timescale: 28_224_000,
+            duration: Some(1),
+            start_number: 1,
+            timeline: None,
+        };
+        let r = rep(Addressing {
+            template: Some(template),
+            ..Addressing::default()
+        });
+        let mut b = Budget::new(Limits::permissive());
+        let (_, segs) = enumerate(
+            &r,
+            "http://a/",
+            Some(Duration::from_fraction(7, 28_224_000).unwrap()),
+            &mut b,
+        )
+        .unwrap();
+        assert_eq!(segs.len(), 7);
+        assert_eq!(segs[6].uri, "http://a/s-7.m4s");
     }
 
     #[test]

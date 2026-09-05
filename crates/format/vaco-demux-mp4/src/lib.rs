@@ -729,15 +729,7 @@ impl Mp4Demuxer {
             if !s.is_attached_pic() {
                 continue;
             }
-            s.duration_ts = total
-                .and_then(|d| {
-                    Timestamp::new(d.as_micros()).checked_rescale(
-                        vaco_core::TimeBase::MICROSECONDS,
-                        s.time_base,
-                        Rounding::NearestAwayFromZero,
-                    )
-                })
-                .and_then(Timestamp::ticks);
+            s.duration_ts = total.and_then(|d| attached_picture_duration_ticks(d, s.time_base));
         }
     }
 
@@ -2533,6 +2525,11 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
     (stream, reader)
 }
 
+/// Rescale the aggregate duration straight from its rational representation.
+fn attached_picture_duration_ticks(duration: Duration, time_base: Rational) -> Option<i64> {
+    duration.to_ticks_rounding(time_base, Rounding::NearestAwayFromZero)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -2543,6 +2540,15 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
 mod tests {
     use super::*;
     use vaco_format_isom::build::{StblSpec, TrackSpec, bx, fullbx, trak};
+
+    #[test]
+    fn attached_picture_duration_rescales_the_exact_container_span() {
+        let duration = Duration::from_fraction(783, 28_224_000).unwrap();
+        assert_eq!(
+            attached_picture_duration_ticks(duration, ATTACHED_PIC_TIME_BASE),
+            Some(2)
+        );
+    }
 
     const TRACK_ID: u32 = 7;
 
