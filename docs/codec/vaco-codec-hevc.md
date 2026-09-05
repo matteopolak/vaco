@@ -934,6 +934,16 @@ decodes to exactly 7,188,480 yuv420p bytes. Vaco matches the archive's
 `cd7e815eb47e8138fec2185d4de84304` MD5 and every Y, U, and V byte. Other
 non-row-aligned WPP boundaries and tile pictures remain named refusals.
 
+The `jctvc-hevc-wpp-b-ericsson-main-2` (`WPP_B_ericsson_MAIN_2`) fixture
+extends the same bounded proof to thirteen CTUs per row (416x240). Its 48
+pictures use the measured mixed dependent/independent boundary patterns,
+including segments that begin and end part-way through a row. The checked-in
+68,895-byte stream has SHA-256
+`f1d18f737a9380f6ce58b6aeae158af458c5b557e06dd24977b7a5c6e095b9b2` and
+decodes to exactly 7,188,480 yuv420p bytes. Vaco matches the archive's
+`e37c7e561a1226640a7bf98e81df78b1` MD5 and every Y, U, and V byte. WPP-C and
+other unproven non-row-aligned boundaries remain named refusals.
+
 ## Tile pictures — named refusal verified by a real two-column stream
 
 Tiles remain out of scope because the CTU walk and its neighbour-availability

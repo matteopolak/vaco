@@ -393,10 +393,10 @@ impl HevcDecoder {
                     .all(|&start| start % ctbs_x == 0)
                 && total_ctbs % ctbs_x == 0;
             // The only non-row-aligned shapes proven against conformance
-            // oracles are WPP-A, WPP-E, and WPP-F. WPP-A's seven-CTU rows
-            // use a finite set of mixed dependent/independent boundaries;
-            // keep every other partial shape refused until it has its own
-            // exact fixture.
+            // oracles are WPP-A, WPP-B, WPP-E, and WPP-F. WPP-A/B's rows use
+            // finite sets of mixed dependent/independent boundaries; keep
+            // every other partial shape refused until it has its own exact
+            // fixture.
             let wpp_a_shape = ctbs_x == 7
                 && total_ctbs == 28
                 && matches!(
@@ -409,6 +409,18 @@ impl HevcDecoder {
                         | [0, 9, 10, 11, 12, 14, 16, 19, 20, 21, 22, 23, 24, 25, 26, 27]
                         | [0, 9, 10, 12, 13, 14, 16, 19, 20, 21, 22, 23, 24, 25, 26, 27]
                 );
+            let wpp_b_shape = ctbs_x == 13
+                && total_ctbs == 104
+                && matches!(
+                    slice_starts.as_slice(),
+                    [0, 2, 3, 4, 5, 6, 13, 15, 16, 17, 18, 26, 28, 30, 32, 39]
+                        | [0, 2, 3, 5, 6, 13, 14, 15, 16, 17, 18, 19, 26, 28, 30, 39]
+                        | [0, 2, 3, 5, 13, 15, 26, 30, 32, 39, 40, 42, 43, 44, 45, 52]
+                        | [0, 13, 16, 18, 19, 26, 30, 31, 32, 39, 40, 41, 42, 43, 44, 52]
+                        | [0, 13, 39, 65, 91]
+                        | [0, 15, 16, 17, 18, 26, 28, 31, 32, 39, 40, 41, 42, 43, 44, 52]
+                        | [0, 15, 16, 18, 19, 26, 28, 31, 32, 39, 40, 41, 42, 43, 44, 52]
+                );
             let bounded_partial_row = (ctbs_x == 2
                 && slice_starts.first().copied() == Some(0)
                 && slice_starts.get(1).copied() == Some(1))
@@ -416,19 +428,16 @@ impl HevcDecoder {
                     && slice_starts.first().copied() == Some(0)
                     && slice_starts.get(1).copied() == Some(1)
                     && slice_starts.get(2).copied() == Some(3))
-                || wpp_a_shape;
+                || wpp_a_shape
+                || wpp_b_shape;
+            let row_aligned_tail = (wpp_a_shape || wpp_b_shape)
+                || slice_starts
+                    .iter()
+                    .skip(if ctbs_x == 2 { 2 } else { 3 })
+                    .all(|&start| start % ctbs_x == 0);
             let bounded_partial_row = bounded_partial_row
                 && total_ctbs % ctbs_x == 0
-                && slice_starts
-                    .iter()
-                    .skip(if ctbs_x == 2 {
-                        2
-                    } else if ctbs_x == 3 {
-                        3
-                    } else {
-                        16
-                    })
-                    .all(|&start| start % ctbs_x == 0);
+                && row_aligned_tail;
             if !row_aligned && !bounded_partial_row {
                 return Err(Error::Unsupported(
                     "vaco-codec-hevc: WPP slice segments must start at CTU-row boundaries",
