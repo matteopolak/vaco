@@ -247,6 +247,40 @@ impl FrameFilter for Filter {
             let plane_h = format.plane_height(height, plane_idx);
             let new_w = format.plane_width(height, plane_idx);
             let new_h = format.plane_height(width, plane_idx);
+            if unit == 1 {
+                for nr in 0..new_h {
+                    let Some(dst_row) = dst_plane.row_mut(nr as usize) else {
+                        continue;
+                    };
+                    let (source_col, reverse_rows) = match self.dir {
+                        Dir::CclockFlip => (nr, false),
+                        Dir::Clock => (nr, true),
+                        Dir::Cclock | Dir::ClockFlip => {
+                            (
+                                plane_w.saturating_sub(1).saturating_sub(nr),
+                                matches!(self.dir, Dir::ClockFlip),
+                            )
+                        }
+                    };
+                    for nc in 0..new_w {
+                        let sr = if reverse_rows {
+                            plane_h.saturating_sub(1).saturating_sub(nc)
+                        } else {
+                            nc
+                        };
+                        let Some(src_row) = src_plane.row(sr as usize) else {
+                            continue;
+                        };
+                        let Some(&value) = src_row.get(source_col as usize) else {
+                            continue;
+                        };
+                        if let Some(dst) = dst_row.get_mut(nc as usize) {
+                            *dst = value;
+                        }
+                    }
+                }
+                continue;
+            }
             for nr in 0..new_h {
                 let Some(dst_row) = dst_plane.row_mut(nr as usize) else {
                     continue;

@@ -80,6 +80,15 @@ The reference's four `dir` values do not map onto "rotate clockwise" /
 "rotate counter-clockwise" the way the names suggest. See `transpose.rs`'s
 doc for the measurement; the summary is in the table below.
 
+For addressable one-byte planes, `transpose` resolves the source row and
+column once per output row and copies the byte directly. This avoids creating
+one-element slices for every pixel while leaving the general multi-byte path
+and all four direction mappings unchanged. On a 640×360 `yuv420p` stream (120
+frames), ten rotated A/B/ffmpeg rounds measured a median 0.376× named
+`CPU Counters` Cycles, 0.444× CPU-seconds, and 0.455× wall time versus the
+unoptimised path. The output remained byte-exact against both the unoptimised
+binary and ffmpeg, including `-threads 1`, `2`, `4`, and `8`.
+
 ## The measured edge-case table
 
 | Filter | Case | Measured behaviour (ffmpeg 8.1) |
