@@ -34,11 +34,10 @@ use rustls::crypto::CryptoProvider;
 /// patched without a new release of it — failing Gate 3's "alive" and
 /// "sound" criteria outright.
 ///
-/// The 2026-08-28 owner amendment to Gate 1 (`planning/00-decisions.md`,
-/// "Gate 1 amendment") permits FFI here specifically: TLS carries no media
-/// semantics, unlike every codec/container/filter crate Gate 1 still binds
-/// absolutely. `ring` is the replacement — see `docs/dependencies.md` for the
-/// full Gate 2/3 record and why it was chosen over `aws-lc-rs` (both were
+/// TLS carries no media semantics, so this crate may use FFI where codec and
+/// container crates may not. `ring` is the replacement — see
+/// `docs/dependencies.md` for the full Gate 2/3 record and why it was chosen
+/// over `aws-lc-rs` (both were
 /// viable; `ring`'s only extra build machinery is `cc`, where `aws-lc-rs`
 /// needs `cc`+`cmake`+`pkg-config`+optionally `bindgen` for the identical
 /// job).

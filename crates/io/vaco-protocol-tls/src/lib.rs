@@ -99,11 +99,10 @@
 //! `rustls` is on that list (`xtask/src/owner_gate.rs`) — "a transport swap
 //! changes what bytes arrive" is exactly true of a TLS stack. `cargo xtask
 //! dep-gate` (D10 Gate 1) separately checks that `ring` — and the `cc` build
-//! machinery it needs — is reachable **only** through this crate; the
-//! 2026-08-28 owner amendment to Gate 1 is what permits that reachability at
-//! all (`planning/00-decisions.md`, "Gate 1 amendment": TLS carries no media
-//! semantics, unlike every codec/container/filter crate Gate 1 still binds
-//! absolutely). `vaco-protocol-http` already had the full D14.2 gate-by-gate
+//! machinery it needs — is reachable **only** through this crate. TLS carries
+//! no media semantics, so this transport-specific FFI is permitted here even
+//! though codec and container crates remain bound by the stricter rule.
+//! `vaco-protocol-http` already had the full D14.2 gate-by-gate
 //! record for this trio in its own crate docs before this crate existed
 //! (`ureq`'s `rustls-no-provider` + `rustls-webpki-roots` features needing
 //! `rustls` present with matching feature flags for Cargo's feature
