@@ -986,8 +986,10 @@ CTB syntax. Because this stream's first CTB in each tile is full-sized and
 above `MinCbLog2SizeY`, the test then consumes exactly the context-0
 `split_cu_flag` required by §7.3.8.4 in each tile; both measured flags are 1,
 then consumes the top-left child split flag under the same proven conditions;
-both measured child flags are also 1, and no later CTB syntax is consumed.
-Finally it sends the same access unit to `HevcDecoder` and
+both measured child flags are also 1. It then consumes the top-left grandchild
+flag: the measured values are `(1, 0)` for tiles 0 and 1 respectively, and no
+later CTB syntax is consumed. Finally it sends the same access unit to
+`HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before the
 decoder consumes tile CABAC for reconstruction. This keeps the parser's

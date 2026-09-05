@@ -34,6 +34,7 @@ pub struct TileCabacState<'a> {
     cabac: CabacDecoder<'a>,
     contexts: ContextBank,
     first_ctb_split: Option<bool>,
+    first_ctb_child_split: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -129,6 +130,51 @@ impl TileCabacState<'_> {
         if !child_in_bounds || child_log2_size == min_cb_log2_size {
             return Err(Error::Unsupported(
                 "vaco-codec-hevc: first tile CTB child split flag is inferred",
+            ));
+        }
+        let context = self
+            .contexts
+            .split_cu_flag
+            .first_mut()
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: split_cu_flag context is missing",
+            ))?;
+        let split = self.cabac.decode_decision(context) != 0;
+        self.first_ctb_child_split = Some(split);
+        Ok(split)
+    }
+
+    /// Decode the top-left grandchild `split_cu_flag` after the child split.
+    ///
+    /// This is the first coding-quadtree node inside the first child, so its
+    /// left and above neighbours remain unavailable and context index 0 still
+    /// applies. The child result must have been decoded and be 1 before this
+    /// read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] when the child split was not
+    /// established or the grandchild flag is inferred, and
+    /// [`vaco_core::Error::InvalidData`] for inconsistent dimensions.
+    pub fn decode_first_ctb_grandchild_split_flag(
+        &mut self,
+        grandchild_log2_size: u32,
+        min_cb_log2_size: u32,
+        grandchild_in_bounds: bool,
+    ) -> Result<bool> {
+        if self.first_ctb_child_split != Some(true) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile CTB grandchild split parent is not set",
+            ));
+        }
+        if grandchild_log2_size < min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile CTB grandchild dimensions are invalid",
+            ));
+        }
+        if !grandchild_in_bounds || grandchild_log2_size == min_cb_log2_size {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile CTB grandchild split flag is inferred",
             ));
         }
         let context = self
@@ -404,6 +450,7 @@ impl TileLayout {
                 cabac,
                 contexts: ContextBank::new(slice_qp),
                 first_ctb_split: None,
+                first_ctb_child_split: None,
             });
         }
         Ok(states)
