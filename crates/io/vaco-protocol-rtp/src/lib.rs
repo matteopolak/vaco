@@ -1,5 +1,5 @@
 //! The `rtp:`/`rtcp:` protocol scheme — RFC 5761 multiplexing and a
-//! sans-io sending session — issue #551, PR-08 (`rtp`, `srtp`, `prompeg`).
+//! sans-io sending session.
 //!
 //! # What this package is
 //!
@@ -34,15 +34,13 @@
 //!
 //! # What is not built (`prompeg`)
 //!
-//! `prompeg` (Pro-MPEG Code of Practice #3 FEC) is named in #551's own
-//! scope but is **not built**: no D7/D15-clean primary source for the
+//! `prompeg` (Pro-MPEG Code of Practice FEC) is **not built**: no D7/D15-clean
+//! primary source for the
 //! COP3 FEC header's exact bit layout (`SNBase`, length-recovery, mask,
-//! `X`/`D`/type/index/offset, `NA`/SNBase-extension fields) could be
-//! located and cross-checked in the time this batch allowed — general
-//! recollection of the byte layout was available but not independently
-//! verifiable against a citable document, and this crate does not label
-//! anything draft-derived that it cannot actually cite. Noted here rather
-//! than silently dropped; see #551's closing comment for the same note.
+//! `X`/`D`/type/index/offset, `NA`/SNBase-extension fields) could be located
+//! and cross-checked against a citable document. This crate does not label
+//! anything draft-derived that it cannot independently verify, so the feature
+//! remains explicitly absent.
 //!
 //! # Evidence
 //!
