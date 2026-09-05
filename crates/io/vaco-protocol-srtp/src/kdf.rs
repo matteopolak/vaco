@@ -8,7 +8,7 @@
 //! scoped to SRTP (RTP payload encryption), not SRTCP, matching the
 //! `srtp` protocol scheme's own name.
 //!
-//! **Scope cut #2:** only `key_derivation_rate = 0` is supported — the
+//! **Scope cut:** only `key_derivation_rate = 0` is supported — the
 //! master key is derived into session keys exactly once and never
 //! re-derived from a growing packet index. RFC 3711 itself calls `kdr=0`
 //! ("no key derivation, other than the initial one") a normal
