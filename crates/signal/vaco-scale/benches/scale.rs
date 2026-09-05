@@ -42,6 +42,7 @@
     reason = "a benchmark that cannot allocate its input has nothing to measure"
 )]
 
+use vaco_limits::{Budget, Limits};
 use vaco_pixfmt::PixFmt;
 use vaco_scale::colour::{Affine, ColorStage};
 use vaco_scale::exec::{DstPlane, SrcPlane};
@@ -268,7 +269,10 @@ mod ab {
     fn matrix() -> Affine {
         let src = ImageSpec::new(PixFmt::Yuv444p, 64, 64);
         let dst = ImageSpec::new(PixFmt::Rgb24, 64, 64);
-        match vaco_scale::colour::build(&src, &dst, 8) {
+        let mut budget = Budget::new(Limits::permissive());
+        match vaco_scale::colour::build(&mut budget, &src, &dst, &ScaleOptions::default(), 8)
+            .unwrap()
+        {
             ColorStage::Affine(a) => a,
             ColorStage::None => unreachable!("a Y'CbCr to R'G'B' conversion has a matrix"),
             ColorStage::Float(_) => unreachable!("benchmark uses default matching colour metadata"),

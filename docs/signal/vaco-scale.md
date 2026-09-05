@@ -37,7 +37,7 @@ always the same three stages, with the identities deleted:
 ```
   unpack + expand depth
     -> resample every channel onto a common "mid" grid      (up)
-    -> 3x3 affine colour transform                          (colour)
+    -> affine, transfer, or 3D-LUT colour transform         (colour)
     -> resample every channel onto its destination grid     (down)
     -> quantise + dither + pack
 ```
@@ -74,7 +74,7 @@ bands are disjoint `chunks_mut` slices the compiler proves cannot alias, and
 | working depth | `max(src, dst)` component depth, clamped to 8..=16, carried in `i32` |
 | filter coefficients | 14-bit fixed point, each row summing to exactly `1 << 14` |
 | between an H and a V pass | 7 extra fractional bits (an 8-bit picture travels as 15-bit) |
-| colour matrix | 13-bit fixed point out to R'G'B', 15-bit out to Y'CbCr; `f64` only when transfer or primaries differ |
+| colour matrix | 13-bit fixed point out to R'G'B', 15-bit out to Y'CbCr; `f64` for transfer, primaries, tone and LUT stages |
 | pack | round or Bayer-dither down to the destination depth, then clamp |
 
 Filter accumulation is `i64`, so no input can overflow it; each bank records its
@@ -105,13 +105,50 @@ signalling (`bt2020` -> BT.2020 / BT.2020-10, `bt470bg` -> BT.470BG / gamma
 the copy-fast-path comparison, so a frame whose colour metadata changes cannot
 silently bypass conversion.
 
+### 2.6 Tone mapping, intents, and the 3D LUT
+
+When HDR peak luminance changes, or a non-colourimetric rendering intent needs
+gamut mapping, planning builds one bounded `Lut3D`. The default grid is `33³`;
+`ScaleOptions::lut3d_size` accepts `9..=65`. Its axes are *coded* source RGB,
+not linear RGB: PQ is steep at black, and a uniform coded grid preserves that
+shadow detail before the LUT decodes transfer, changes primaries, maps tone and
+gamut, and returns destination-linear RGB for the final destination transfer
+encode. The table is allocated through the caller's `Budget` at plan time and
+is shared across every frame using that `Scaler`.
+
+Samples use tetrahedral interpolation, not trilinear interpolation. The cube is
+split by the order of its three fractional coordinates; every resulting
+tetrahedron includes the black-to-white diagonal. An identity or affine lattice
+cannot distinguish the two methods, so `tests/lut3d_reference.rs` uses
+non-affine corners and samples every one of the six coordinate orders against
+ffmpeg's `lut3d=interp=tetrahedral` black box.
+
+`ImageSpec::with_hdr_peaks(mastering, content_light)` supplies peak luminance
+to the raw-plane API. `scale_frame` obtains the same values from
+`MasteringDisplay` and `ContentLightLevel` side data. Mastering peak wins over
+content-light peak; missing metadata resolves to 10,000 nits for PQ, 1,000 for
+HLG, and 100 for SDR.
+
+| `ScaleOptions::intent` | Policy |
+|---|---|
+| `relative_colorimetric` (default) | Bradford-adapt white, then clip outside the destination RGB boundary. |
+| `absolute_colorimetric` | Keep the original white point, then clip. |
+| `perceptual` | Apply the BT.2390 PQ-domain Hermite EETF when peak decreases, then smooth chroma compression. |
+| `saturation` | Preserve the neutral/chroma direction and scale it to the destination RGB boundary. |
+
+An HDR source whose peak is above the destination always applies BT.2390's
+peak-aware EETF, regardless of intent. The independent `tone_oracle` test owns
+the PQ, BT.709, and Hermite equations so it does not reuse either the production
+transfer implementation or the production LUT builder; the 1,000-to-100-nit
+PQ-to-BT.709 patch set measured a maximum 1 LSB LUT error.
+
 ---
 
 ## 3. Fidelity against the reference
 
 Measured, not asserted. `cargo test -p vaco-scale --test reference -- --nocapture`
 reproduces the table; `paths_graded_exact_stay_exact` turns a regression in an
-Exact path into a test failure. ffmpeg 8.1, `aarch64-apple-darwin`, 128×96
+Exact path into a test failure. ffmpeg 9.0.1, `aarch64-apple-darwin`, 128×96
 structure-plus-noise input.
 
 Grades are D11's: **Exact** = byte-identical; **Equivalent** = differs within a
@@ -200,6 +237,12 @@ split and lane width. The transfer/primaries path is Class C because `f64`
 transcendentals are intentionally not a bit-exact reference implementation;
 it is checked against an independent high-precision oracle and against ffmpeg's
 direct in-gamut Y'CbCr `colorspace` probes (max 1 LSB, at least 67 dB).
+Tone and gamut LUTs are also Class C: the table is deterministic for a fixed
+grid and options, and tests cover every intent, a published-equation BT.2390
+oracle (max 1 LSB on the HDR patch set), and ffmpeg 9.0.1 tetrahedral
+interpolation (exact on six non-affine simplex-order samples). They are
+intentionally not declared byte-identical to a reference tone mapper because
+ffmpeg 9.0.1 exposes no BT.2390 mode in its `tonemap` filter.
 
 ---
 
@@ -214,8 +257,10 @@ direct in-gamut Y'CbCr `colorspace` probes (max 1 LSB, at least 67 dB).
 * Six resampling kernels: point, bilinear, bicubic (Mitchell–Netravali),
   lanczos, gaussian, area.
 * Range conversion; the H.273 matrices that have a linear R'G'B' form;
-  transfer characteristics; Bradford-adapted primary conversion; chroma
-  subsampling and siting; ordered (Bayer) dither.
+  transfer characteristics; Bradford-adapted primary conversion; HDR peak
+  metadata, BT.2390 tone mapping, four ICC-named intents, bounded 3D LUTs with
+  tetrahedral interpolation; chroma subsampling and siting; ordered (Bayer)
+  dither.
 * Float pixel-format proxies (`grayf16`/`grayf32`, `rgbf16`/`rgbf32`) at the
   frame boundary. The colour stage itself retains `f64` until final quantisation.
 * Slice threading, plane-copy and no-op fast paths, the full `sws` option surface.
@@ -229,7 +274,6 @@ direct in-gamut Y'CbCr `colorspace` probes (max 1 LSB, at least 67 dB).
 | XYZ | needs the dedicated XYZ pixel-format path |
 | sub-byte packings (`monow`, `rgb4`) | not addressable by load-shift-mask |
 | hardware surfaces | not in this address space |
-| tone mapping and gamut intents | need mastering metadata and a defined gamut mapping policy (SP-A6) |
 | `gamma=1` | needs filter placement inside the linear-light domain, not only colour conversion |
 | constant-luminance, `ICtCp`, `IPT-C2`, `YCgCo-R`, ST 2085 matrices | not a linear transform on R'G'B' |
 | error-diffusion and arithmetic dither | `Bayer` and `none` only |

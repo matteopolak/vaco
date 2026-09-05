@@ -33,6 +33,16 @@ pub struct ImageSpec {
     pub height: u32,
     /// Colour signalling. Any field may be `Unspecified`.
     pub color: ColorInfo,
+    /// Peak luminance from mastering-display metadata, in cd/m².
+    ///
+    /// `None` means that the transfer characteristic's nominal peak supplies
+    /// the tone-mapping source or target instead.
+    pub mastering_peak_nits: Option<u32>,
+    /// Content light level when mastering metadata is absent, in cd/m².
+    ///
+    /// The scaler uses this only as the second-choice peak estimate; mastering
+    /// metadata is the display contract and therefore wins when both exist.
+    pub content_light_peak_nits: Option<u32>,
 }
 
 impl ImageSpec {
@@ -44,6 +54,8 @@ impl ImageSpec {
             width,
             height,
             color: ColorInfo::default(),
+            mastering_peak_nits: None,
+            content_light_peak_nits: None,
         }
     }
 
@@ -51,6 +63,19 @@ impl ImageSpec {
     #[must_use]
     pub const fn with_color(mut self, color: ColorInfo) -> Self {
         self.color = color;
+        self
+    }
+
+    /// Attach HDR peak metadata without requiring callers of the raw-plane API
+    /// to construct a video frame solely to carry it.
+    #[must_use]
+    pub const fn with_hdr_peaks(
+        mut self,
+        mastering_peak_nits: Option<u32>,
+        content_light_peak_nits: Option<u32>,
+    ) -> Self {
+        self.mastering_peak_nits = mastering_peak_nits;
+        self.content_light_peak_nits = content_light_peak_nits;
         self
     }
 
@@ -140,6 +165,22 @@ impl ImageSpec {
         }
     }
 
+    /// Peak luminance used to normalise HDR tone mapping.
+    ///
+    /// Mastering metadata is authoritative, content light is a useful fallback,
+    /// and the remaining defaults are the nominal peaks of PQ, HLG, and SDR.
+    #[must_use]
+    pub fn effective_peak_nits(&self) -> u32 {
+        self.mastering_peak_nits
+            .filter(|peak| *peak > 0)
+            .or_else(|| self.content_light_peak_nits.filter(|peak| *peak > 0))
+            .unwrap_or_else(|| match self.effective_transfer() {
+                TransferCharacteristic::Smpte2084 => 10_000,
+                TransferCharacteristic::AribStdB67 => 1_000,
+                _ => 100,
+            })
+    }
+
     /// Whether this spec is byte-for-byte the same picture description as
     /// `other`, which is what lets a conversion degrade to a plane copy.
     #[must_use]
@@ -151,6 +192,8 @@ impl ImageSpec {
             && self.effective_matrix() == other.effective_matrix()
             && self.effective_primaries() == other.effective_primaries()
             && self.effective_transfer() == other.effective_transfer()
+            && (self.effective_peak_nits() == other.effective_peak_nits()
+                || (!self.effective_transfer().is_hdr() && !other.effective_transfer().is_hdr()))
     }
 }
 

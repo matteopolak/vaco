@@ -181,7 +181,7 @@ impl Plan {
             .max_depth()
             .max(dst_layout.max_depth())
             .clamp(8, 16);
-        let colour = colour::build(&src, &dst, work_depth);
+        let colour = colour::build(budget, &src, &dst, opts, work_depth)?;
 
         let out_comps = dst_layout.ncomp;
         let matrix_inputs = if colour.needs_common_resolution() {

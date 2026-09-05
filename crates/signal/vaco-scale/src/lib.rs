@@ -44,11 +44,12 @@
 //! subsampling and siting, and ordered dither.
 //!
 //! **Not implemented, and refused rather than approximated:** palette, Bayer,
-//! XYZ, hardware surfaces, tone mapping, and the constant-luminance and
-//! `ICtCp`-family matrices. Transfer-characteristic and primaries conversion use
-//! a scalar `f64` stage; floating-point pixel formats are reached through integer
-//! proxies. `docs/signal/vaco-scale.md` has the full list and the measured
-//! fidelity of everything that *is* implemented.
+//! XYZ, hardware surfaces, and the constant-luminance and
+//! `ICtCp`-family matrices. Transfer-characteristic, primaries, HDR tone mapping
+//! and gamut intent conversion use a scalar `f64` stage; tone/gamut transforms
+//! are cached as bounded 3D LUTs evaluated tetrahedrally. Floating-point pixel
+//! formats are reached through integer proxies. `docs/signal/vaco-scale.md` has
+//! the full list and the measured fidelity of everything that *is* implemented.
 //!
 //! # A reference deviation we do not reproduce
 //!
@@ -69,7 +70,7 @@ mod special;
 
 pub use exec::{DstPlane, SrcPlane};
 pub use filter::{FilterBank, Kernel};
-pub use options::{DitherKind, ScaleOptions, ScalerKind, SwsFlags};
+pub use options::{DitherKind, RenderingIntent, ScaleOptions, ScalerKind, SwsFlags};
 pub use plan::Plan;
 pub use scaler::{Scaler, supports_conversion, supports_input, supports_output};
 pub use spec::ImageSpec;

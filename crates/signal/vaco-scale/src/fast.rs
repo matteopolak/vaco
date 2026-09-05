@@ -173,8 +173,10 @@ fn affine_row_simd<S: Lanes>(simd: S, a: &Affine, r0: &mut [i32], r1: &mut [i32]
 mod tests {
     use super::*;
     use crate::colour;
+    use crate::options::ScaleOptions;
     use crate::spec::ImageSpec;
     use vaco_color::{ColorInfo, ColorRange, MatrixCoefficients};
+    use vaco_limits::{Budget, Limits};
     use vaco_pixfmt::PixFmt;
 
     fn affine() -> Affine {
@@ -187,6 +189,7 @@ mod tests {
                 matrix: MatrixCoefficients::Bt709,
                 ..ColorInfo::default()
             },
+            ..ImageSpec::new(PixFmt::Yuv444p, 64, 1)
         };
         let d = ImageSpec {
             format: PixFmt::Rgb24,
@@ -196,8 +199,10 @@ mod tests {
                 range: ColorRange::Full,
                 ..ColorInfo::default()
             },
+            ..ImageSpec::new(PixFmt::Rgb24, 64, 1)
         };
-        match colour::build(&s, &d, 8) {
+        let mut budget = Budget::new(Limits::permissive());
+        match colour::build(&mut budget, &s, &d, &ScaleOptions::default(), 8).unwrap() {
             colour::ColorStage::Affine(a) => a,
             colour::ColorStage::None => panic!("expected an affine stage"),
             colour::ColorStage::Float(_) => panic!("expected an affine stage"),

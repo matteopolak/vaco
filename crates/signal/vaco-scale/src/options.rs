@@ -98,6 +98,29 @@ pub enum DitherKind {
     Bayer,
 }
 
+/// Rendering policy when the source exceeds the destination's dynamic range or gamut.
+///
+/// The four variants use the ICC vocabulary so callers can carry a rendering
+/// intent through a scaler without translating it into an implementation-specific
+/// name.  The colour stage resolves this once while it builds its LUT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, OptEnum)]
+#[opt_enum(unit = "intent", base = "int")]
+pub enum RenderingIntent {
+    /// Compress tones and chroma smoothly for photographic material.
+    #[opt_const(name = "perceptual", help = "smooth tone and gamut compression")]
+    Perceptual,
+    /// Adapt white points and clip only colours outside the destination gamut.
+    #[opt_const(name = "relative_colorimetric", help = "white-point adapted clipping")]
+    #[default]
+    RelativeColorimetric,
+    /// Preserve chroma direction while mapping it onto the destination boundary.
+    #[opt_const(name = "saturation", help = "preserve relative saturation")]
+    Saturation,
+    /// Preserve absolute white point and clip outside the destination gamut.
+    #[opt_const(name = "absolute_colorimetric", help = "unadapted clipping")]
+    AbsoluteColorimetric,
+}
+
 /// Every knob the scaler exposes.
 ///
 /// Construct with `ScaleOptions::default()` and mutate, or parse a
@@ -183,6 +206,27 @@ pub struct ScaleOptions {
         flags(video, param)
     )]
     pub dither: DitherKind,
+
+    /// Rendering intent for HDR tone and wide-gamut mapping.
+    #[opt(
+        name = "intent",
+        unit = "intent",
+        help = "tone and gamut rendering intent",
+        default = RenderingIntent::RelativeColorimetric,
+        default_repr = "relative_colorimetric",
+        flags(video, param)
+    )]
+    pub intent: RenderingIntent,
+
+    /// Grid edge length for the cached tone/gamut 3D LUT.
+    #[opt(
+        name = "lut3d_size",
+        help = "tone and gamut LUT grid size",
+        default = 33,
+        range = 9..=65,
+        flags(video, param)
+    )]
+    pub lut3d_size: i32,
 
     /// Cap on the tap count of any single filter bank.
     #[opt(name = "max_taps", help = "maximum filter taps", default = 64,
@@ -460,6 +504,15 @@ mod tests {
         assert_eq!(o.scaler, ScalerKind::Lanczos);
         assert_eq!(o.luma_kernel(), Kernel::Lanczos { a: 4.0 });
         assert_eq!(o.threads, 3);
+    }
+
+    #[test]
+    fn intent_and_lut_grid_parse_through_the_public_option_surface() {
+        let mut o = ScaleOptions::default();
+        o.set_from_string("intent=perceptual:lut3d_size=17", "=", ":")
+            .expect("parses");
+        assert_eq!(o.intent, RenderingIntent::Perceptual);
+        assert_eq!(o.lut3d_size, 17);
     }
 
     #[test]

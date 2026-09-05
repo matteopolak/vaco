@@ -369,7 +369,7 @@ fn run_band(
 
     // 3. Colour, in place, across channels. Destructuring the array is what
     //    gives three disjoint `&mut` without any runtime aliasing check.
-    if let ColorStage::Affine(a) = g.colour {
+    if let ColorStage::Affine(a) = &g.colour {
         let [m0, m1, m2, _] = &mut mid;
         if let (Some(g0), Some(g1), Some(g2)) = (m0.as_mut(), m1.as_mut(), m2.as_mut()) {
             for y in union.0..union.1 {
@@ -377,11 +377,11 @@ fn run_band(
                 else {
                     continue;
                 };
-                (g.kernels.affine_row)(&a, r0, r1, r2);
+                (g.kernels.affine_row)(a, r0, r1, r2);
             }
         }
     }
-    if let ColorStage::Float(a) = g.colour {
+    if let ColorStage::Float(a) = &g.colour {
         let [m0, m1, m2, _] = &mut mid;
         if let (Some(g0), Some(g1), Some(g2)) = (m0.as_mut(), m1.as_mut(), m2.as_mut()) {
             for y in union.0..union.1 {
@@ -389,7 +389,7 @@ fn run_band(
                 else {
                     continue;
                 };
-                apply_float(&a, r0, r1, r2);
+                apply_float(a, r0, r1, r2);
             }
         }
     }

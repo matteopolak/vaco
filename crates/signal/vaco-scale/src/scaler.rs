@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use vaco_core::{Error, Result};
-use vaco_frame::{Frame, FrameData};
+use vaco_frame::{Frame, FrameData, FrameSideData};
 use vaco_limits::{Budget, Limits};
 
 use crate::exec::{self, DstPlane, SrcPlane};
@@ -276,11 +276,31 @@ fn spec_of(frame: &Frame) -> Result<ImageSpec> {
     else {
         return Err(Error::InvalidData("frame is not video"));
     };
+    let mut mastering_peak_nits = None;
+    let mut content_light_peak_nits = None;
+    for side_data in &frame.side_data {
+        match side_data {
+            FrameSideData::MasteringDisplay(display) if mastering_peak_nits.is_none() => {
+                let peak = display.max_luminance.to_f64();
+                if peak.is_finite() && peak > 0.0 && peak <= f64::from(u32::MAX) {
+                    mastering_peak_nits = Some(peak.round() as u32);
+                }
+            }
+            FrameSideData::ContentLightLevel { max_cll, .. }
+                if content_light_peak_nits.is_none() && *max_cll > 0 =>
+            {
+                content_light_peak_nits = Some(*max_cll);
+            }
+            _ => {}
+        }
+    }
     Ok(ImageSpec {
         format,
         width,
         height,
         color: frame.color,
+        mastering_peak_nits,
+        content_light_peak_nits,
     })
 }
 
