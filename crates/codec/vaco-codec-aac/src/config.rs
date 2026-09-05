@@ -23,9 +23,12 @@
 //! 6 (5.1), 7 (7.1), 11 (6.1 back), and 12 (7.1) are resolved directly.
 //! The standard's Table 42 establishes their `SCE`/`CPE`/`LFE` order;
 //! the direct 7.1-side mapping for configurations 7 and 12 is distinct from
-//! PCE-only 7.1(wide) control. The remaining rarer configuration (14) is
-//! rejected with
-//! [`Error::Unsupported`] rather than guessed at — a wrong element-count
+//! PCE-only 7.1(wide) control. Configuration 14 (5.1.2 back) is likewise
+//! resolved directly; its two height channels use Table 42's explicit
+//! element order rather than an eight-channel count-based guess.
+//!
+//! Other unsupported configurations are rejected with [`Error::Unsupported`]
+//! rather than guessed at — a wrong element-count
 //! assumption there would desync every channel element's decode after the
 //! first, the same class of bug this workspace has now found and fixed
 //! twice in other codecs by *not* trusting an unchecked recollection.
@@ -81,8 +84,8 @@ impl ChannelResolution {
 }
 
 /// The subset of `channelConfiguration` values this crate resolves without a
-/// program config element. See the module doc for why 11/12/14 are
-/// deliberately absent rather than guessed.
+/// program config element. The direct values have a Table 42 element order
+/// verified against a non-silent reference control.
 fn known_channel_count(channel_configuration: u8) -> Option<u32> {
     match channel_configuration {
         1 => Some(1),
@@ -94,6 +97,7 @@ fn known_channel_count(channel_configuration: u8) -> Option<u32> {
         7 => Some(8),
         11 => Some(7),
         12 => Some(8),
+        14 => Some(8),
         _ => None,
     }
 }
@@ -533,10 +537,16 @@ mod tests {
     }
 
     #[test]
-    fn configuration_fourteen_remains_a_named_refusal() {
-        let asc = vaco_parse_aac::AudioSpecificConfig::parse(&[0x11, 0xf0]).unwrap();
-        let error = DecoderConfig::from_audio_specific_config(&asc).unwrap_err();
-        assert!(error.to_string().contains("channel_configuration 14"));
+    fn aac_lc_512_back_from_real_mp4_asc_resolves_directly() {
+        // ffmpeg 9.0.1's 48 kHz 5.1.2(back) AAC-LC MP4 control.
+        let asc =
+            vaco_parse_aac::AudioSpecificConfig::parse(&[0x11, 0xf0, 0x56, 0xe5, 0x00]).unwrap();
+        let cfg = DecoderConfig::from_audio_specific_config(&asc).unwrap();
+        assert_eq!(cfg.channels, ChannelResolution::Known { count: 8 });
+        assert_eq!(
+            cfg.output_layout().and_then(|layout| layout.name()),
+            Some("5.1.2(back)")
+        );
     }
 
     #[test]

@@ -146,7 +146,7 @@ impl AacDecoder {
 /// Permute `channels` from `raw_data_block`'s syntactic element order into
 /// the conventional front-left-first output order for the
 /// `channelConfiguration` values this crate resolves without a program
-/// config element (`known_channel_count` in `crate::config`: 1 through 7, 11, 12).
+/// config element (`known_channel_count` in `crate::config`: 1 through 7, 11, 12, 14).
 ///
 /// The entry for each configuration is `output_index -> source_index`,
 /// derived from Table 1.19's syntactic element order (`SCE`, `CPE`, `CPE`,
@@ -176,6 +176,9 @@ impl AacDecoder {
 ///   (two `SCE`s, two `CPE`s, one `LFE`); output order is
 ///   `[FL, FR, FC, LFE, BL, BR, BC]`.
 /// - 12 (7.1): uses the same syntax and output order as 7.
+/// - 14 (5.1.2 back): syntactic order is `[C, L, R, Lb, Rb, LFE, TBL, TBR]`
+///   (one `SCE`, one front `CPE`, one back `CPE`, one `LFE`, one top-back
+///   `CPE`); output order is `[FL, FR, FC, LFE, BL, BR, TBL, TBR]`.
 ///
 /// Any other `channel_configuration` (including PCE-explicit layouts whose
 /// element structure does not have a verified map, and the 14 value
@@ -189,6 +192,7 @@ fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configu
         (6, 6) => &[1, 2, 0, 5, 3, 4],
         (7 | 12, 8) => &[1, 2, 0, 7, 5, 6, 3, 4],
         (11, 7) => &[1, 2, 0, 6, 3, 4, 5],
+        (14, 8) => &[1, 2, 0, 5, 3, 4, 6, 7],
         _ => return,
     };
     reorder_channels(channels, perm);
@@ -315,6 +319,34 @@ mod output_order_tests {
                 vec![3.0],
                 vec![4.0],
                 vec![5.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn configuration_fourteen_moves_height_channels_after_the_51_bed() {
+        let mut channels = vec![
+            vec![0.0],
+            vec![1.0],
+            vec![2.0],
+            vec![3.0],
+            vec![4.0],
+            vec![5.0],
+            vec![6.0],
+            vec![7.0],
+        ];
+        reorder_to_output_channel_order(&mut channels, 14);
+        assert_eq!(
+            channels,
+            vec![
+                vec![1.0],
+                vec![2.0],
+                vec![0.0],
+                vec![5.0],
+                vec![3.0],
+                vec![4.0],
+                vec![6.0],
+                vec![7.0],
             ]
         );
     }

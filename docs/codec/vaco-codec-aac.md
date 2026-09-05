@@ -228,14 +228,15 @@ permuted to native front-left/front-right/front-centre; per-plane `axcorrelate`
 RMS levels were −0.012389 to −0.012037 dB from unity, which verifies the map
 with three independently non-silent signals.
 
-### Channel-configuration coverage: 1 through 7, 11, and 12 direct; 0 via PCE; 14 gated
+### Channel-configuration coverage: 1 through 7, 11, 12, and 14 direct; 0 via PCE
 
 [`DecoderConfig::from_adts_header`] and
 [`DecoderConfig::from_audio_specific_config`] both resolve
 `channelConfiguration` 1 (mono), 2 (stereo), 3 (3.0), 4 (4.0), 5 (5.0), 6
-(5.1), 7 (7.1), 11 (6.1 back), and 12 (7.1) directly. Each has a specified
-`SCE`/`CPE`/`LFE` element sequence. `channelConfiguration == 0` instead
-resolves exactly from a real PCE via [`DecoderConfig::try_resolve_pending`].
+(5.1), 7 (7.1), 11 (6.1 back), 12 (7.1), and 14 (5.1.2 back) directly.
+Each has a specified `SCE`/`CPE`/`LFE` element sequence.
+`channelConfiguration == 0` instead resolves exactly from a real PCE via
+[`DecoderConfig::try_resolve_pending`].
 
 The decoder also keeps a PCE's native output layout when its element order
 already matches output plane order: front-centre mono, front stereo, and a
@@ -305,10 +306,19 @@ the real reference and Vaco each emitted **1,347,584 bytes** (47 × 1024 × 7 ×
 cross-channel matrix has exactly one diagonal match per output, proving the
 back-pair/back-centre/LFE permutation rather than merely the channel count.
 
-**Configuration 14 remains rejected with `Error::Unsupported`.** Its Table 42
-element ordering still lacks a matching independent acceptance control; the
-ISO/IEC 14496-26 vector set remains the closure criterion rather than a reason
-to guess.
+#### Direct 5.1.2 back: configuration 14 checked against a real control
+
+Configuration 14's direct syntax order is `FC, FL, FR, BL, BR, LFE, TBL,
+TBR`; Vaco emits native `FL, FR, FC, LFE, BL, BR, TBL, TBR`. A fresh 1.024 s,
+48 kHz, eight-tone `5.1.2(back)` AAC-LC MP4 control generated with
+`ffmpeg -c:a aac` carried ASC `11 f0 56 e5 00`, 49 access units, and reported eight
+channels with that layout through `ffprobe`. Vaco decoded the MP4's actual
+access units under that ASC. Its 49 raw AAC frames include one priming frame;
+after excluding that 1024-sample frame, Vaco and `ffmpeg -bitexact` each
+emitted **1,572,864 bytes** (48 × 1024 × 8 × 4). The eight diagonal
+per-plane correlations were 0.999979 to 1.000000. The 64-cell cross-plane
+matrix's largest off-diagonal result was 0.008386, so both the LFE placement
+and the two height-plane positions are tested against non-silent values.
 
 ### Object-type gating
 
@@ -926,13 +936,8 @@ plausible-looking implementation that a real bitstream falsifies.
 - **`coupling_channel_element()` (`CCE`) is not implemented** —
   `Error::Unsupported`. It carries its own `individual_channel_stream()`
   plus a per-coupled-element gain list this crate has not transcribed.
-  Rare in real 1/2/3/4/5/6/7/11/12-channel content (this crate's resolved
+  Rare in real 1/2/3/4/5/6/7/11/12/14-channel content (this crate's resolved
   configurations); gated rather than guessed at.
-- **`channelConfiguration` 14** is gated (see "Channel-
-  configuration coverage" above), pending ISO/IEC 14496-3 Table 42's exact
-  element ordering being checked against a primary copy rather than
-  recalled. `reorder_to_output_channel_order` (`decoder.rs`) only knows the
-  output permutation for 1 through 7, 11, and 12 for the same reason.
 - **HE-AAC/HE-AACv2 (SBR, Parametric Stereo)** are explicitly rejected at
   the configuration layer — #446/#447, a different (and each individually
   substantial) package, per this issue's own dispatch.
@@ -974,14 +979,6 @@ plausible-looking implementation that a real bitstream falsifies.
   from-primary-text transcription (e.g. a from-spec reference decoder's own
   source, read for its citation rather than copied) to check the
   1024/448/128/448 split in `reconstruct::build_window` against.
-- **Adding `channelConfiguration` 14:** get ISO/IEC
-  14496-3 Table 42's element ordering for that value from a primary copy,
-  add it to `config.rs`'s `known_channel_count` (renaming/restructuring it
-  to carry an element order, not just a count, since that is what a real
-  decoder needs), a unit test alongside the existing 1/2/3/4/5/6/7/11/12 cases, and a
-  matching entry in `decoder.rs`'s `reorder_to_output_channel_order`. Do not
-  extrapolate an ordering from the ones already here — 1/2/3/4/5/6/7/11/12 were chosen
-  specifically because they were confident, not because they generalise.
 - **Adding `coupling_channel_element()`:** transcribe Table 4.8's syntax
   (`ind_sw_cce_flag`, `num_coupled_elements`, the per-coupled-element gain
   list) alongside `pce.rs`'s pattern; it embeds one
