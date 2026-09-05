@@ -823,14 +823,14 @@ crate decides what becomes a stream:
   boxes in both worlds. A malformed present `ipma` table, including an index
   beyond its `ipco` property list refuses the item file rather than applying
   a partial property configuration. An essential property the resolver cannot
-  apply discards only its associated item. `ispe` supplies the size; an item with no
-  `pasp`
+  apply discards only its associated item. Exactly one `ispe` supplies each
+  item's size; an item with no `pasp`
   reports `sample_aspect_ratio 1:1` (measured — the reference prints `1:1`
   for an AVIF item where the same codec in a track prints nothing).
 * **Every `grid` item becomes a `TileGrid` stream group**, not a stream:
   `dimg` names the tiles in raster order, the descriptor (read from `idat`
   for `construction_method 1`, from the file for 0) gives rows, columns
-  and output size; the grid's own `ispe` must agree with that output, and the
+  and output size; the grid's single `ispe` must agree with that output, and the
   tiles' `ispe` gives the canvas (`coded_*`) and per-tile offsets. A grid whose
   tile count is not `rows × columns`, whose tiles are not streams or do not
   share one `ispe` size, whose `ispe` disagrees with its descriptor, or whose

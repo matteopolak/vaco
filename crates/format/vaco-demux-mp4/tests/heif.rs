@@ -314,6 +314,21 @@ fn a_grid_with_an_ispe_that_disagrees_with_its_descriptor_is_refused() {
 }
 
 #[test]
+fn a_grid_with_multiple_ispe_properties_is_refused() {
+    let mut bytes = heif();
+    let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
+    // The grid's two properties are `ispe` then `clap`. Repeating `ispe`
+    // must not let property lookup silently choose an arbitrary one.
+    bytes[ipma + 24] = 2;
+    let demux = open(bytes);
+    assert_eq!(demux.streams().len(), 3, "coded items remain reachable");
+    assert!(
+        demux.stream_groups().is_empty(),
+        "a grid has exactly one spatial-extents property"
+    );
+}
+
+#[test]
 fn a_truncated_property_association_table_refuses_the_item_file() {
     let mut bytes = heif();
     let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();

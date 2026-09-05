@@ -286,7 +286,16 @@ impl<'a> Meta<'a> {
     }
 
     fn ispe(&self, item_id: u32) -> Option<(u32, u32)> {
-        heif::parse_ispe(self.property(item_id, bt::ISPE)?)
+        let assoc = self.ipma.iter().find(|a| a.item_id == item_id)?;
+        let mut properties = assoc.properties.iter().filter_map(|&(_, index)| {
+            let property = self.ipco.get(usize::from(index).checked_sub(1)?)?;
+            (property.kind() == bt::ISPE).then_some(property)
+        });
+        let ispe = properties.next()?;
+        properties
+            .next()
+            .is_none()
+            .then(|| heif::parse_ispe(ispe))?
     }
 
     fn clap(&self, item_id: u32) -> Option<heif::CleanAperture> {
