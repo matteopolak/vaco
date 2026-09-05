@@ -172,11 +172,13 @@ via [`DecoderConfig::try_resolve_pending`].
 The decoder also keeps a PCE's native output layout when its element order
 already matches output plane order: front-centre mono, front stereo, and a
 front `CPE` plus one `LFE` (`2.1`), or a front `CPE` plus back `CPE`
-(`quad`). It also recognises the exact `7.1(wide)` PCE shape of one front
-`SCE`, two front `CPE`s, one back `CPE`, and one `LFE`: its verified raw order
-is front-centre, front-wide pair, front-left/right pair, back pair, LFE, and
-it is permuted into native `FL/FR/FC/LFE/BL/BR/FLC/FRC` order. More complex
-PCEs retain their exact channel count but remain layout-unspecified until their
+(`quad`). It also recognises the exact `3.0` PCE shape of one front `SCE` plus
+one front `CPE`, whose centre/front-pair raw order is permuted into
+`FL/FR/FC`. The exact `7.1(wide)` PCE shape of one front `SCE`, two front
+`CPE`s, one back `CPE`, and one `LFE` is likewise verified: its raw order is
+front-centre, front-wide pair, front-left/right pair, back pair, LFE, and it is
+permuted into native `FL/FR/FC/LFE/BL/BR/FLC/FRC` order. More complex PCEs
+retain their exact channel count but remain layout-unspecified until their
 required plane permutation is implemented and verified.
 
 For raw ADTS, that PCE is normally present only in the first packet. Once a
@@ -600,6 +602,13 @@ three-non-silent-tone `2.1` fixture again reported 48 packets and produced
 `ffmpeg -bitexact` were −0.008787, −0.004685 and 0.000000 dB from unity.
 The same code now rejects a `program_config_element()` after audio elements
 with a named error rather than silently treating it as metadata.
+
+A separate three-non-silent-tone `3.0` AAC-LC ADTS fixture was encoded with
+`-aac_pce 1` to force this PCE route instead of the direct configuration. It
+reported 48 packets; Vaco and `ffmpeg -bitexact` each emitted **589,824 bytes**
+(48 × 1024 samples × 3 channels × 4-byte `f32` samples). Its raw
+centre/front-pair order now maps to native `FL/FR/FC`, with per-plane
+correlations from −0.056688 to −0.056060 dB from unity.
 
 An eight-non-silent-tone `7.1(wide)` AAC-LC ADTS fixture exercises a leading
 PCE shape that ordinary ADTS `channelConfiguration` cannot label directly.

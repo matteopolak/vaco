@@ -20,6 +20,7 @@ use vaco_core::Error;
 use vaco_core::Result;
 use vaco_parse_aac::AudioObjectType;
 
+const THREE_0_OUTPUT_PERMUTATION: [usize; 3] = [1, 2, 0];
 const WIDE_71_OUTPUT_PERMUTATION: [usize; 8] = [3, 4, 0, 7, 5, 6, 1, 2];
 
 /// One channel-element reference inside a program config element: whether the
@@ -74,6 +75,26 @@ pub struct ProgramConfigElement {
 }
 
 impl ProgramConfigElement {
+    fn is_three_zero_shape(&self) -> bool {
+        matches!(
+            (
+                self.front.as_slice(),
+                self.side.as_slice(),
+                self.back.as_slice(),
+                self.lfe.as_slice(),
+            ),
+            (
+                [
+                    ChannelElementRef { is_cpe: false, .. },
+                    ChannelElementRef { is_cpe: true, .. }
+                ],
+                [],
+                [],
+                []
+            )
+        )
+    }
+
     fn is_wide_71_shape(&self) -> bool {
         matches!(
             (
@@ -122,6 +143,11 @@ impl ProgramConfigElement {
         ) {
             ([ChannelElementRef { is_cpe: false, .. }], [], [], []) => Some(ChannelLayout::MONO),
             ([ChannelElementRef { is_cpe: true, .. }], [], [], []) => Some(ChannelLayout::STEREO),
+            _ if self.is_three_zero_shape() => ChannelLayout::custom([
+                Channel::FrontLeft,
+                Channel::FrontRight,
+                Channel::FrontCenter,
+            ]),
             ([ChannelElementRef { is_cpe: true, .. }], [], [], [_]) => ChannelLayout::custom([
                 Channel::FrontLeft,
                 Channel::FrontRight,
@@ -156,8 +182,13 @@ impl ProgramConfigElement {
     /// known to differ from its output layout.
     #[must_use]
     pub fn output_permutation(&self) -> Option<&'static [usize]> {
-        self.is_wide_71_shape()
-            .then_some(&WIDE_71_OUTPUT_PERMUTATION)
+        if self.is_three_zero_shape() {
+            Some(&THREE_0_OUTPUT_PERMUTATION)
+        } else if self.is_wide_71_shape() {
+            Some(&WIDE_71_OUTPUT_PERMUTATION)
+        } else {
+            None
+        }
     }
 
     /// Every channel element this PCE describes, in the order a decoder
@@ -479,6 +510,36 @@ mod tests {
             pce.output_permutation(),
             Some(&[3, 4, 0, 7, 5, 6, 1, 2][..])
         );
+    }
+
+    #[test]
+    fn a_three_zero_pce_exposes_its_native_layout_and_permutation() {
+        let pce = ProgramConfigElement {
+            element_instance_tag: 0,
+            object_type: AudioObjectType::AAC_LC,
+            sampling_frequency_index: 3,
+            front: vec![
+                ChannelElementRef {
+                    is_cpe: false,
+                    tag: 0,
+                },
+                ChannelElementRef {
+                    is_cpe: true,
+                    tag: 0,
+                },
+            ],
+            side: vec![],
+            back: vec![],
+            lfe: vec![],
+            mono_mixdown_element_number: None,
+            stereo_mixdown_element_number: None,
+            matrix_mixdown: None,
+        };
+        assert_eq!(
+            pce.known_output_layout().and_then(|layout| layout.name()),
+            Some("3.0")
+        );
+        assert_eq!(pce.output_permutation(), Some(&[1, 2, 0][..]));
     }
 
     #[test]
