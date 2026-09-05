@@ -644,6 +644,49 @@ mod tests {
         bytes
     }
 
+    /// A framed mono AAC-LC packet whose complete `SCE` is followed by the
+    /// `ID_CCE` selector. The decoder must reject the CCE before it can make
+    /// the preceding audio visible as a partial frame.
+    fn adts_frame_with_cce_after_minimal_sce() -> Vec<u8> {
+        use vaco_bitstream::BitWriter;
+        let mut body = BitWriter::new();
+        body.put(3, 0); // ID_SCE
+        body.put(4, 0); // element_instance_tag
+        body.put(8, 100); // global_gain
+        body.put(1, 0); // ics_reserved_bit
+        body.put(2, 0); // ONLY_LONG
+        body.put(1, 0); // sine window
+        body.put(6, 1); // max_sfb = 1
+        body.put(1, 0); // predictor_data_present
+        body.put(4, 0); // sect_cb = ZERO_HCB
+        body.put(5, 1); // sect_len = 1
+        body.put(1, 0); // pulse_data_present
+        body.put(1, 0); // tns_data_present
+        body.put(1, 0); // gain_control_data_present
+        body.put(3, 2); // ID_CCE
+        let body_bytes = body.finish();
+
+        let mut w = BitWriter::new();
+        w.put(12, 0xfff);
+        w.put(1, 0);
+        w.put(2, 0);
+        w.put(1, 1); // protection_absent
+        w.put(2, 1); // profile: LC
+        w.put(4, 3); // 48000
+        w.put(1, 0);
+        w.put(3, 1); // mono
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(13, 7 + body_bytes.len() as u32); // aac_frame_length
+        w.put(11, 0x7ff);
+        w.put(2, 0);
+        let mut bytes = w.finish();
+        bytes.extend_from_slice(&body_bytes);
+        bytes
+    }
+
     fn adts_frame_with_sbr_fill_payload() -> Vec<u8> {
         use vaco_bitstream::BitWriter;
         let mut body = BitWriter::new();
@@ -924,6 +967,18 @@ mod tests {
 
         let error = dec.send_packet(Some(&packet)).unwrap_err();
         assert!(error.to_string().contains("SBR fill payload"));
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    #[test]
+    fn a_cce_after_audio_is_refused_before_partial_frame_output() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let packet =
+            Packet::from_slice(&mut budget, &adts_frame_with_cce_after_minimal_sce()).unwrap();
+
+        let error = dec.send_packet(Some(&packet)).unwrap_err();
+        assert!(error.to_string().contains("coupling_channel_element"));
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 

@@ -937,7 +937,10 @@ plausible-looking implementation that a real bitstream falsifies.
   `Error::Unsupported`. It carries its own `individual_channel_stream()`
   plus a per-coupled-element gain list this crate has not transcribed.
   Rare in real 1/2/3/4/5/6/7/11/12/14-channel content (this crate's resolved
-  configurations); gated rather than guessed at.
+  configurations); gated rather than guessed at. Its production routing is
+  covered by an ADTS fixture with a complete `SCE` followed by `ID_CCE`: the
+  named refusal occurs before a partial frame is queued. This is a refusal
+  guard, not a claim of CCE decoding or an independent CCE control.
 - **HE-AAC/HE-AACv2 (SBR, Parametric Stereo)** are explicitly rejected at
   the configuration layer — #446/#447, a different (and each individually
   substantial) package, per this issue's own dispatch.
