@@ -143,6 +143,28 @@ jobs:
       - run: cargo check --workspace --no-default-features --locked
       - run: cargo check --workspace --all-features --locked
 
+  binary-size:
+    name: binary-size dispatch budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      # D12's multiversioning cost is allowed to be at most 2.5x the build
+      # that keeps only the x86-64 baseline dispatch arm. The two isolated
+      # target directories ensure Cargo never reuses a differently-configured
+      # fearless_simd artifact for the comparison.
+      - name: Keep multiversioning within the release size budget
+        shell: bash
+        run: |
+          cargo build --release --locked -p vaco --bin vvmpeg --target-dir target/size-full
+          RUSTFLAGS="--cfg disable_dispatch_avx512 --cfg disable_dispatch_avx2 --cfg disable_dispatch_sse4_2" \
+            cargo build --release --locked -p vaco --bin vvmpeg --target-dir target/size-baseline
+          full=$(stat --format=%s target/size-full/release/vvmpeg)
+          baseline=$(stat --format=%s target/size-baseline/release/vvmpeg)
+          echo "vvmpeg dispatch build: ${full} bytes; baseline-dispatch build: ${baseline} bytes"
+          test "$baseline" -gt 0
+          test $(( full * 2 )) -le $(( baseline * 5 ))
+
   # QA-05/QA-07 (plan 13 §5.2's `fuzz-regressions` job): every seed under
   # fuzz/seeds/ once crashed something and was fixed; replaying all of them
   # on every PR is what keeps a fix a fix. `scripts/replay-fuzz-regressions.sh`

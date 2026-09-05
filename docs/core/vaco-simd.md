@@ -176,18 +176,60 @@ width on top of the random sweep.
 
 ## Configuration
 
-No Cargo features, no environment variables, no runtime configuration. Two knobs exist outside the
-crate:
+`VACO_TIER` is an optional process environment variable for differential
+testing. It caps dispatch at a tier the running CPU already proved it supports;
+it can never enable instructions the CPU lacks. Accepted spellings are
+`sse2`, `sse4.2`, `avx2`, `avx512`, and `neon`; unknown, cross-architecture,
+and unavailable values retain automatic detection. `scalar` is reserved as the
+scalar-reference label, but is not a dispatch override because the shipped
+substrate does not compile its fallback backend on x86-64 or aarch64. The
+value is read once, on the first `Caps::detect()` call, so set it before
+starting the process.
+
+Two build knobs exist outside the crate:
 
 * `RUSTFLAGS="--cfg disable_dispatch_avx512"` (also `_avx2`, `_sse4_2`, `_sse2`) prunes a level from
-  multiversioning. Affects binary size only; the token types and `Caps::tier()` are unaffected. **The
-  size impact is unmeasured** — see the measurement report's caveat.
+  multiversioning. It affects binary size only; the token types and `Caps::tier()` are unaffected.
+  CI builds `vvmpeg` both with all dispatch levels and with the x86-64 baseline
+  arm, rejecting an all-level binary larger than 2.5x the baseline build.
 * `-C target-cpu=native` raises the *baseline*, which `Caps::baseline()` reports. `Caps::detect()`
   is unaffected and remains the right call for shipped code.
 
 `Caps::detect()` is cheap to call repeatedly — the substrate caches its `cpuid` probe in a
 `LazyLock` on x86, and the level is a compile-time constant elsewhere — but it should still be
 stored, not re-derived per row.
+
+## Startup and size measurement
+
+On 2026-09-05, a release `vvmpeg` built from `b16885d5` was compared with
+the same archive plus this change on an Apple Silicon host (macOS 26.6.2,
+Rust 1.99.0-nightly). Both builds used `CARGO_INCREMENTAL=0`, an isolated
+target directory, and one build job. A 398-byte WAV made by the `ffmpeg 9.0.1`
+binary was opened before an intentionally unknown output extension, so each
+Vaco invocation reaches the registry extension scan before returning its
+format error. Twelve A/B/reference rounds alternated their order; each sample
+contained 50 launches.
+
+| Binary | Wall time / launch | CPU time / launch |
+| --- | ---: | ---: |
+| baseline Vaco | 11.417 ms | 6.450 ms |
+| candidate Vaco | 11.683 ms | 6.400 ms |
+| `ffmpeg` reference | 46.100 ms | 27.933 ms |
+
+The Vaco wall-time difference is within the noise of such a short process;
+the 0.8% CPU reduction is not presented as a reliable whole-process startup
+win. The point of the registry change is instead structural and local: its
+static-table scans no longer allocate a temporary filename or MIME `String`,
+and muxer matching builds one borrowed `ProbeData` for the scan rather than
+one per row. Both release binaries were 12,627,920 bytes on this ARM build;
+the all-level and x86-dispatch-pruned flag builds were also equal because this
+target has only the NEON arm. The CI budget is the x86-64 enforcement point.
+
+Instruments' named `CPU Counters` template was available and recorded the
+candidate, but the sub-millisecond target produced no counter interval, so no
+instruction or cycle value is claimed. The App Launch trace is retained as a
+secondary launch trace; grouped `/usr/bin/time -lp` values above provide the
+reported wall and CPU measurements.
 
 ## Dependencies
 

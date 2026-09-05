@@ -78,6 +78,12 @@ the "to add a kind" note below describes, executed.
 
 Every row carries the `#[cfg(feature = …)]` its fragment named.
 
+The emitted tables are `&'static` arrays: enabling a component adds its row at
+link time and disabling it compiles the row away. There is no process-start
+registry construction to defer. The extension and MIME query iterators borrow
+their caller's `&str`, so the probe path also does not allocate a temporary
+`String` merely to scan a static table.
+
 The `Cargo.toml` region:
 
 ```toml

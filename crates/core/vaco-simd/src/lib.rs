@@ -218,6 +218,23 @@ impl Tier {
             Self::Neon => "neon",
         }
     }
+
+    /// Parse the stable configuration spelling for an instruction-set tier.
+    ///
+    /// This is shared by the `VACO_TIER` environment override and diagnostics
+    /// so the externally visible names cannot drift from [`Self::name`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "scalar" => Some(Self::Scalar),
+            "sse2" => Some(Self::Sse2),
+            "sse4.2" => Some(Self::Sse42),
+            "avx2" => Some(Self::Avx2),
+            "avx512" => Some(Self::Avx512),
+            "neon" => Some(Self::Neon),
+            _ => None,
+        }
+    }
 }
 
 impl core::fmt::Display for Tier {
@@ -225,6 +242,17 @@ impl core::fmt::Display for Tier {
         f.write_str(self.name())
     }
 }
+
+/// The process configuration, parsed only when dispatch is first requested.
+///
+/// Re-reading an environment variable on every [`Caps::detect`] call would
+/// make a diagnostic override part of each kernel's hot setup path.
+static ENV_TIER_CAP: std::sync::LazyLock<Option<Tier>> = std::sync::LazyLock::new(|| {
+    std::env::var("VACO_TIER")
+        .ok()
+        .as_deref()
+        .and_then(Tier::from_name)
+});
 
 /// A runtime proof of which SIMD instructions this CPU actually has.
 ///
@@ -239,10 +267,16 @@ pub struct Caps(fearless_simd::Level);
 
 impl Caps {
     /// Probe the CPU. On x86 the first call runs `cpuid` and the result is
-    /// cached by the substrate; elsewhere the level is statically known.
+    /// cached by the substrate; elsewhere the level is statically known. On
+    /// its first call, a valid `VACO_TIER` value can cap dispatch to a
+    /// supported lower tier for differential testing; unsupported, unavailable
+    /// and invalid values leave the detected capability unchanged.
     #[must_use]
     pub fn detect() -> Self {
-        Self(fearless_simd::Level::new())
+        let detected = Self(fearless_simd::Level::new());
+        (*ENV_TIER_CAP)
+            .and_then(|max| detected.capped_at(max))
+            .unwrap_or(detected)
     }
 
     /// The strongest level the *build target* statically guarantees, ignoring
@@ -300,6 +334,38 @@ impl Caps {
     #[must_use]
     pub fn __level(self) -> fearless_simd::Level {
         self.0
+    }
+
+    /// Return the strongest supported token no stronger than `max`.
+    ///
+    /// A cap can only lower a proof derived from this CPU; it never constructs
+    /// a capability token from configuration. `None` therefore means the
+    /// requested tier is not a dispatchable tier for this target or CPU.
+    fn capped_at(self, max: Tier) -> Option<Self> {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            let level = match max {
+                Tier::Sse2 => self.0.as_sse2().map(fearless_simd::Level::Sse2),
+                Tier::Sse42 => self.0.as_sse4_2().map(fearless_simd::Level::Sse4_2),
+                Tier::Avx2 => self.0.as_avx2().map(fearless_simd::Level::Avx2),
+                Tier::Avx512 => self.0.as_avx512().map(fearless_simd::Level::Avx512),
+                Tier::Scalar | Tier::Neon => None,
+            }?;
+            Some(Self(level))
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            if max == Tier::Neon {
+                Some(Self(fearless_simd::Level::Neon(self.0.as_neon()?)))
+            } else {
+                None
+            }
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            let _ = max;
+            None
+        }
     }
 }
 
@@ -406,6 +472,67 @@ mod tests {
         assert!(Tier::Sse2 < Tier::Sse42);
         assert!(Tier::Sse42 < Tier::Avx2);
         assert!(Tier::Avx2 < Tier::Avx512);
+    }
+
+    #[test]
+    fn tier_names_round_trip_through_the_configuration_parser() {
+        for tier in [
+            Tier::Scalar,
+            Tier::Sse2,
+            Tier::Sse42,
+            Tier::Avx2,
+            Tier::Avx512,
+            Tier::Neon,
+        ] {
+            assert_eq!(Tier::from_name(tier.name()), Some(tier));
+        }
+        assert_eq!(Tier::from_name("not-a-tier"), None);
+    }
+
+    #[test]
+    fn a_cap_never_synthesizes_an_unavailable_capability() {
+        let detected = Caps::detect();
+        #[cfg(target_arch = "x86_64")]
+        {
+            assert_eq!(
+                detected.capped_at(Tier::Sse2).map(Caps::tier),
+                Some(Tier::Sse2)
+            );
+            assert!(detected.capped_at(Tier::Neon).is_none());
+        }
+        #[cfg(target_arch = "x86")]
+        assert!(detected.capped_at(Tier::Neon).is_none());
+        #[cfg(target_arch = "aarch64")]
+        {
+            assert_eq!(
+                detected.capped_at(Tier::Neon).map(Caps::tier),
+                Some(Tier::Neon)
+            );
+            assert!(detected.capped_at(Tier::Sse2).is_none());
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn environment_override_caps_dispatch_before_first_detection() {
+        if std::env::var_os("VACO_SIMD_CAP_CHILD").is_some() {
+            assert_eq!(Caps::detect().tier(), Tier::Sse2);
+            return;
+        }
+
+        let child = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .arg("--exact")
+                .arg("tests::environment_override_caps_dispatch_before_first_detection")
+                .arg("--nocapture")
+                .env("VACO_SIMD_CAP_CHILD", "1")
+                .env("VACO_TIER", "sse2")
+                .output()
+        });
+        assert!(child.is_ok());
+        if let Ok(output) = child {
+            assert!(output.status.success());
+        }
     }
 
     /// The native `u8` lane count for a token. Written as a generic function

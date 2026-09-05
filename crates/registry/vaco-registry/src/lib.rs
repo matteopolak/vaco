@@ -252,8 +252,7 @@ pub fn demuxer_by_name(name: &str) -> Option<&'static DemuxerDesc> {
 /// `.mp4` is claimed by more than one container in a full build — and the
 /// caller (probing, or `-f`) decides how to break the tie. Extension matching is
 /// a *hint* to the probe engine, never a selection on its own.
-pub fn demuxers_for_extension(filename: &str) -> impl Iterator<Item = &'static DemuxerDesc> {
-    let filename = filename.to_owned();
+pub fn demuxers_for_extension(filename: &str) -> impl Iterator<Item = &'static DemuxerDesc> + '_ {
     DEMUXERS
         .iter()
         .copied()
@@ -265,12 +264,10 @@ pub fn demuxers_for_extension(filename: &str) -> impl Iterator<Item = &'static D
 /// Both are consulted because [`DemuxerDesc`] carries `mime_types` but
 /// [`MuxerDesc`] does not, so the fragment is the only uniform source and the
 /// two can in principle disagree. `tests/generated.rs` asserts they do not.
-pub fn demuxers_for_mime(mime: &str) -> impl Iterator<Item = &'static DemuxerDesc> {
-    let mime = mime.to_owned();
+pub fn demuxers_for_mime(mime: &str) -> impl Iterator<Item = &'static DemuxerDesc> + '_ {
     DEMUXERS.iter().copied().filter(move |d| {
-        d.mime_types.contains(&mime.as_str())
-            || component(Kind::Demuxer, d.name)
-                .is_some_and(|c| c.mime_types.contains(&mime.as_str()))
+        d.mime_types.contains(&mime)
+            || component(Kind::Demuxer, d.name).is_some_and(|c| c.mime_types.contains(&mime))
     })
 }
 
@@ -287,13 +284,12 @@ pub fn muxer_by_name(name: &str) -> Option<&'static MuxerDesc> {
 }
 
 /// The muxer whose `extensions` claim `filename`, for output-format guessing.
-pub fn muxers_for_extension(filename: &str) -> impl Iterator<Item = &'static MuxerDesc> {
-    let filename = filename.to_owned();
-    MUXERS.iter().copied().filter(move |m| {
-        ProbeData::new(&[])
-            .with_filename(&filename)
-            .extension_matches(m.extensions)
-    })
+pub fn muxers_for_extension(filename: &str) -> impl Iterator<Item = &'static MuxerDesc> + '_ {
+    let probe = ProbeData::new(&[]).with_filename(filename);
+    MUXERS
+        .iter()
+        .copied()
+        .filter(move |m| probe.extension_matches(m.extensions))
 }
 
 // -------------------------------------------------------------------- codecs
