@@ -380,6 +380,12 @@ file (`ffmpeg`'s encoder does not emit a `pssh` on its own) and are transcribed
 directly from ISO/IEC 23001-7 instead — noted as such in the module doc
 comment, not presented as measured.
 
+For a `tenc` or `seig` entry with `per_sample_IV_size = 0`, `ConstantIv`
+retains both the declared 8- or 16-byte `constant_IV_size` and the bytes. A
+short tail is rejected rather than zero-padded: the missing length information
+would otherwise make an 8-byte IV indistinguishable from a 16-byte value whose
+last eight bytes happen to be zero.
+
 `SampleTable` and `TrackFragment` retain every raw `sgpd`/`sbgp` pair because
 their meaning is selected by `grouping_type`. For Common Encryption,
 `cenc::SeigDescriptions` parses the deployed version-1 `sgpd(seig)` entry

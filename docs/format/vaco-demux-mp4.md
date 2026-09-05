@@ -653,6 +653,13 @@ emits one `encryption_key_id` tag for every declared KID, in declaration order;
 the same helper handles `pssh` under `moov` and top-level `pssh` beside `moof`.
 The opaque DRM-system `Data` stays uninterpreted.
 
+`tenc`/`seig` constant IVs retain their declared 8- or 16-byte size in the box
+layer and reject truncated tails, but are not yet tags: the reference muxer
+fixture used here emits only per-sample IVs. Reporting a hand-mutated encrypted
+sample as though it proved the constant-IV packet semantics would be misleading;
+add exact `encryption_constant_iv_size` and `encryption_constant_iv` tags only
+with a standards-conforming fixture that exercises them.
+
 Measured: `ffprobe 8.1` on such a file surfaces **no** encryption tag at all,
 and `ffmpeg -i` decodes the still-encrypted bytes into visibly corrupt frames
 without refusing the file. Reporting the scheme is therefore new behaviour

@@ -56,6 +56,16 @@ impl SchemeType {
     }
 }
 
+/// A `tenc` or `seig` constant IV, retaining its declared size so an 8-byte
+/// value cannot be mistaken for a zero-padded 16-byte value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstantIv {
+    /// `default_constant_IV_size` or `constant_IV_size` from the box.
+    pub size: u8,
+    /// The IV bytes, followed by zeroes only beyond [`Self::size`].
+    pub bytes: [u8; 16],
+}
+
 /// `tenc` — per-track default encryption parameters (§8.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackEncryption {
@@ -71,7 +81,7 @@ pub struct TrackEncryption {
     /// `default_KID`.
     pub default_kid: [u8; 16],
     /// Present only when `is_protected` and `per_sample_iv_size == 0`.
-    pub constant_iv: Option<[u8; 16]>,
+    pub constant_iv: Option<ConstantIv>,
 }
 
 impl TrackEncryption {
@@ -92,20 +102,23 @@ impl TrackEncryption {
         let per_sample_iv_size = r.u8();
         let default_kid: [u8; 16] = r.bytes(16).try_into().ok()?;
         let constant_iv = if is_protected && per_sample_iv_size == 0 {
-            let len = usize::from(r.u8());
-            let iv = r.bytes(len);
-            let mut padded = [0u8; 16];
-            let n = iv.len().min(16);
-            if let (Some(dst), Some(src)) = (padded.get_mut(..n), iv.get(..n)) {
-                dst.copy_from_slice(src);
+            let size = r.u8();
+            if !matches!(size, 8 | 16) {
+                return None;
             }
-            Some(padded)
+            let bytes = r.bytes(usize::from(size));
+            if bytes.len() != usize::from(size) {
+                return None;
+            }
+            let mut stored = [0u8; 16];
+            stored.get_mut(..usize::from(size))?.copy_from_slice(bytes);
+            Some(ConstantIv {
+                size,
+                bytes: stored,
+            })
         } else {
             None
         };
-        // A short box already zero-filled every field the reader could not
-        // reach; `check()` is not consulted here because a `tenc` with no
-        // `constant_iv` legitimately ends before that optional tail.
         Some(Self {
             crypt_byte_block,
             skip_byte_block,
@@ -211,17 +224,20 @@ impl SeigDescriptions {
                         "isom: invalid sgpd(seig) constant IV size",
                     ));
                 }
-                let size = usize::from(size);
-                let iv = entry.bytes(size);
+                let size_usize = usize::from(size);
+                let iv = entry.bytes(size_usize);
                 let mut padded = [0u8; 16];
-                let dst = padded.get_mut(..size).ok_or(Error::InvalidData(
+                let dst = padded.get_mut(..size_usize).ok_or(Error::InvalidData(
                     "isom: invalid sgpd(seig) constant IV size",
                 ))?;
                 if iv.len() != dst.len() {
                     return Err(Error::InvalidData("isom: truncated sgpd(seig) constant IV"));
                 }
                 dst.copy_from_slice(iv);
-                Some(padded)
+                Some(ConstantIv {
+                    size,
+                    bytes: padded,
+                })
             } else {
                 None
             };
@@ -639,7 +655,50 @@ mod tests {
         let b = bx(*b"tenc", &body);
         let t = TrackEncryption::parse(&b).unwrap();
         assert_eq!((t.crypt_byte_block, t.skip_byte_block), (1, 9));
-        assert_eq!(t.constant_iv, Some([0xCDu8; 16]));
+        assert_eq!(
+            t.constant_iv,
+            Some(ConstantIv {
+                size: 16,
+                bytes: [0xCDu8; 16],
+            })
+        );
+    }
+
+    #[test]
+    fn tenc_preserves_an_eight_byte_constant_iv_without_widening_it() {
+        let mut body = vec![1, 0, 0, 0]; // version=1, flags=0
+        body.push(0); // reserved
+        body.push(0); // no pattern
+        body.push(1); // is_protected
+        body.push(0); // per_sample_iv_size = 0 -> constant IV follows
+        body.extend_from_slice(&[0xAB; 16]); // default_KID
+        body.push(8); // constant_iv_size
+        body.extend_from_slice(&[0xCD; 8]);
+        let b = bx(*b"tenc", &body);
+        let t = TrackEncryption::parse(&b).unwrap();
+        assert_eq!(
+            t.constant_iv,
+            Some(ConstantIv {
+                size: 8,
+                bytes: [
+                    0xCD, 0xCD, 0xCD, 0xCD, 0xCD, 0xCD, 0xCD, 0xCD, 0, 0, 0, 0, 0, 0, 0, 0,
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn tenc_rejects_a_truncated_constant_iv() {
+        let mut body = vec![1, 0, 0, 0]; // version=1, flags=0
+        body.push(0); // reserved
+        body.push(0); // no pattern
+        body.push(1); // is_protected
+        body.push(0); // per_sample_iv_size = 0 -> constant IV follows
+        body.extend_from_slice(&[0xAB; 16]); // default_KID
+        body.push(16); // constant_iv_size
+        body.extend_from_slice(&[0xCD; 8]); // truncated constant IV
+        let b = bx(*b"tenc", &body);
+        assert!(TrackEncryption::parse(&b).is_none());
     }
 
     #[test]
