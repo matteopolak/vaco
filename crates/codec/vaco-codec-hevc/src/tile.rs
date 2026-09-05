@@ -95,6 +95,59 @@ impl TileLayout {
         substreams.checked_sub(1)
     }
 
+    /// Convert tiles-only entry-point lengths into tile-scan byte ranges.
+    ///
+    /// `data_len` and each entry-point length are measured from the first byte
+    /// after the aligned slice header, as required by §7.4.7.1. The returned
+    /// ranges are half-open and ordered by tile ID. This helper deliberately
+    /// validates only the partition; it does not initialize CABAC or expose
+    /// samples to the still-refused tile decoder path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::InvalidData`] when the count is not one less
+    /// than the tile count, an offset overflows, or the ranges exceed the
+    /// supplied slice-data length.
+    pub fn tile_substream_byte_ranges(
+        &self,
+        data_len: usize,
+        entry_point_offsets: &[u32],
+    ) -> Result<Vec<(usize, usize)>> {
+        let substreams = self.tile_substream_count().ok_or(Error::InvalidData(
+            "vaco-codec-hevc: tile substream count overflow",
+        ))?;
+        let expected = usize::try_from(substreams.saturating_sub(1)).unwrap_or(usize::MAX);
+        if entry_point_offsets.len() != expected {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: tile entry point count does not match tile substreams",
+            ));
+        }
+        let mut ranges = Vec::new();
+        let mut start = 0usize;
+        for &offset in entry_point_offsets {
+            let length = usize::try_from(offset).map_err(|_| {
+                Error::InvalidData("vaco-codec-hevc: tile entry point offset too large")
+            })?;
+            if length == 0 {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile entry point offset is zero",
+                ));
+            }
+            let end = start.checked_add(length).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: tile entry point offset overflow",
+            ))?;
+            if end > data_len {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile entry point exceeds slice data",
+                ));
+            }
+            ranges.push((start, end));
+            start = end;
+        }
+        ranges.push((start, data_len));
+        Ok(ranges)
+    }
+
     /// Return `(tile_id, tile-local raster CTB address)` for a CTB.
     ///
     /// The tile-local address is the address consumed by a tile substream,

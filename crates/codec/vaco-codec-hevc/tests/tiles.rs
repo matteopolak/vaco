@@ -16,14 +16,15 @@
     reason = "test code over one fixed, checked-in conformance-shaped fixture"
 )]
 
+use vaco_bitstream::BitReader;
 use vaco_codec_core::Decoder;
 use vaco_codec_hevc::{HevcDecoder, TileLayout};
 use vaco_core::Error;
-use vaco_format_nalu::Framing;
+use vaco_format_nalu::{Framing, RbspBuf, units};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_hevc::HevcParser;
 use vaco_parse_hevc::pps::Tiles;
+use vaco_parse_hevc::{HevcNalHeader, HevcParser, SliceHeader};
 
 const HEVC: &[u8] = include_bytes!("fixtures/tiles_512x64.hevc");
 
@@ -117,4 +118,52 @@ fn nonuniform_tile_widths_and_heights_leave_edges_unavailable() {
     assert!(!layout.above_available(0, 1));
     assert!(!layout.above_available(1, 1));
     assert!(layout.above_available(1, 2));
+}
+
+#[test]
+fn real_tile_slice_header_has_one_tile_entry_point_offset() {
+    let limits = Limits::default();
+    let mut parser = HevcParser::new(limits.clone());
+    parser
+        .push_access_unit(HEVC, Framing::AnnexB)
+        .expect("valid tile fixture parses");
+    let pps = parser
+        .parameter_sets()
+        .get_pps(0)
+        .expect("fixture references PPS zero");
+    let sps = parser
+        .parameter_sets()
+        .get_sps(pps.sps_id)
+        .expect("fixture references SPS zero");
+    let tiles = pps.tiles.as_ref().expect("fixture PPS enables tiles");
+    let layout = TileLayout::from_pps(tiles, sps.pic_width_in_ctbs(), sps.pic_height_in_ctbs())
+        .expect("fixture tile geometry is valid");
+    let mut budget = Budget::new(limits);
+    let mut rbsp = RbspBuf::new();
+    let (header, data_len) = units(HEVC, Framing::AnnexB)
+        .find_map(|nal| {
+            let nal_header = HevcNalHeader::parse(nal.data)?;
+            if !nal_header.nal_unit_type.has_slice_header() {
+                return None;
+            }
+            rbsp.fill(nal.data, &mut budget).ok()?;
+            let mut reader = BitReader::new(rbsp.as_slice());
+            reader.skip(16);
+            let header =
+                SliceHeader::parse_data(&mut reader, nal_header, sps, pps, &mut budget).ok()?;
+            let header_len = usize::try_from(reader.bit_pos().div_ceil(8)).ok()?;
+            Some((header, nal.data.len().saturating_sub(header_len)))
+        })
+        .expect("fixture has a parseable VCL slice header");
+    assert_eq!(header.entry_point_offsets.len(), 1);
+    let ranges = layout
+        .tile_substream_byte_ranges(data_len, &header.entry_point_offsets)
+        .expect("fixture entry point partitions both tile substreams");
+    assert_eq!(
+        ranges,
+        vec![
+            (0, header.entry_point_offsets[0] as usize),
+            (header.entry_point_offsets[0] as usize, data_len)
+        ]
+    );
 }
