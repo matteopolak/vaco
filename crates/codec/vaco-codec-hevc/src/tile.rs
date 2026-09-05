@@ -44,6 +44,7 @@ pub struct TileCabacState<'a> {
     first_ctb_leaf_second_prev_intra: Option<bool>,
     first_ctb_leaf_second_mpm_prefix: Option<bool>,
     first_ctb_leaf_second_mpm_suffix: Option<bool>,
+    first_ctb_leaf_second_luma_mode: Option<u8>,
 }
 
 impl TileCabacState<'_> {
@@ -473,6 +474,48 @@ impl TileCabacState<'_> {
         self.first_ctb_leaf_second_mpm_suffix = Some(suffix);
         Ok(suffix)
     }
+
+    /// Resolve the second PU's measured MPM index to its luma mode.
+    ///
+    /// The first PU to the left is the established `INTRA_DC` mode and the
+    /// above neighbour is unavailable at the first CTB's top edge. Section
+    /// 8.4.2 therefore derives `[PLANAR, DC, VER]`; this bounded step accepts
+    /// only the fixture's measured MPM index 2 (`VER`). The following PU's
+    /// syntax remains unconsumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] unless the two preceding
+    /// luma modes establish the measured index, and
+    /// [`vaco_core::Error::InvalidData`] for inconsistent leaf dimensions.
+    pub fn resolve_first_ctb_leaf_second_luma_mode(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<u8> {
+        if self.first_ctb_leaf_second_mpm_suffix != Some(true)
+            || self.first_ctb_leaf_luma_mode != Some(crate::intra_mode::DC_IDX)
+        {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile second PU MPM index is not the measured mode",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        let mode = *crate::intra_mode::mpm_list(
+            crate::intra_mode::DC_IDX,
+            crate::intra_mode::DC_IDX,
+        )
+        .get(2)
+        .ok_or(Error::InvalidData(
+            "vaco-codec-hevc: first tile MPM list is incomplete",
+        ))?;
+        self.first_ctb_leaf_second_luma_mode = Some(mode);
+        Ok(mode)
+    }
 }
 
 impl TileLayout {
@@ -747,6 +790,7 @@ impl TileLayout {
                 first_ctb_leaf_second_prev_intra: None,
                 first_ctb_leaf_second_mpm_prefix: None,
                 first_ctb_leaf_second_mpm_suffix: None,
+                first_ctb_leaf_second_luma_mode: None,
             });
         }
         Ok(states)
