@@ -838,6 +838,28 @@ and the same real-binary check with `wpp=0`) are unchanged.
 
 `check_scope` no longer refuses `entropy_coding_sync_enabled_flag`.
 
+## Tile pictures — named refusal verified by a real two-column stream
+
+Tiles remain out of scope because the CTU walk and its neighbour-availability
+state are still addressed as one raster picture; treating a tile boundary as a
+slice boundary would emit wrong intra references and loop-filter decisions.
+The refusal is now covered by `tests/tiles.rs` with a real HM 18.0 Main-profile
+Annex-B fixture: one 512x64 IDR picture, two uniform tile columns, WPP off,
+SAO and deblocking off. The test first parses the PPS and asserts
+`tiles_enabled_flag`, `num_tile_columns_minus1 + 1 == 2`, and one tile row,
+then sends the same access unit to `HevcDecoder` and requires exactly
+`Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before any
+CABAC data is decoded. This keeps the parser's §7.3.2.3 tile syntax exercised
+without allowing a decoder path that has not implemented §6.5 tile-neighbour
+availability.
+
+The checked-in stream is 1,813 bytes with SHA-256
+`e7ede7ded9e07974097809c4bacda3492a6634a216a8d8b5c8920a3ceb3c91f2`.
+Independent black-box `ffmpeg` decoding produces 49,152 visible yuv420p bytes
+with MD5 `6ccc33b0cd92240a275d30a05de031cc`; the output is recorded to make
+the fixture's geometry and reference decode measurable even though Vaco
+correctly emits no frame for it.
+
 ## Per-CU QP delta (`cu_qp_delta`), landed
 
 The one restriction still standing after deblocking, SAO and WPP all
