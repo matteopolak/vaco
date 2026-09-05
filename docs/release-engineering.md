@@ -7,6 +7,11 @@ builds, the SBOM, the third-party attribution file, checksums, and the
 signing/notarization runbook. Closes QA-10 (#182), the last child of epic
 #9.
 
+For the crates.io distribution (`vaco`, with installed `vvmpeg` and `vvprobe`),
+see [Crates.io publishing](release/crates-io-publishing.md). That path has a
+separate read-only package-content gate and is intentionally held until the
+repository's open issues are cleared.
+
 ### CI compiler cache
 
 The GitHub Actions build matrix keeps sccache enabled on every platform, but

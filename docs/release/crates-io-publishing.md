@@ -25,6 +25,13 @@ refuses to run while GitHub has an open issue other than release-tracking issue
 against crates.io and its expected owner, then audits and packages the closure
 before publishing it in dependency order.
 
+The package gate is deliberately read-only until the final owner-approved
+publish step. `scripts/verify-crates-io-package.py` runs Cargo's package-list
+probe and checks that the `vaco` archive contains its manifest, README, facade
+library, and exactly the `vvmpeg` and `vvprobe` source targets. It also rejects
+legacy `vaco`/`vaco-probe` binary sources. The gate does not invoke `cargo
+publish` and does not require a registry token.
+
 ## How to change it
 
 After changing a production dependency, run:
@@ -47,6 +54,15 @@ document for offline investigation. `--apply` is a deliberate later mutation
 step; it is not used for audit. `check-crates-io-names.py --plan <plan.json>
 --expected-owner <user-or-team>` is a separate preflight. The release workflow
 supplies the final root and checks GitHub issues before calling Cargo publish.
+For a local package-content check, run:
+
+```sh
+CARGO_INCREMENTAL=0 RUSTC_WRAPPER= \
+  python3 scripts/verify-crates-io-package.py
+```
+
+`cargo package --list` may still need the existing lockfile and local registry
+cache; use a private `CARGO_TARGET_DIR` when running it in a shared checkout.
 
 ## Dependencies
 

@@ -1,0 +1,103 @@
+name: Crates.io readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_owner:
+        description: "crates.io owner allowed for already-reserved Vaco names"
+        required: true
+        default: matteopolak
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-07
+
+      - name: Refuse while unrelated GitHub issues remain open
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues?state=open&per_page=100" \
+            > "$RUNNER_TEMP/open-issues.json"
+          python3 - "$RUNNER_TEMP/open-issues.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          issues = [issue for page in pages for issue in page]
+          blocked = sorted(
+              issue["number"]
+              for issue in issues
+              if "pull_request" not in issue and issue["number"] != 665
+          )
+          if blocked:
+              raise SystemExit(
+                  "open issues block crates.io readiness: "
+                  + ", ".join(f"#{number}" for number in blocked)
+              )
+          print(f"open-issue gate passed ({len(issues)} open issues; #665 is the tracking exception)")
+          PY
+
+      - name: Check the generated facade is current
+        run: |
+          cargo metadata --format-version 1 --locked > "$RUNNER_TEMP/default-metadata.json"
+          cargo metadata --format-version 1 --locked --all-features > "$RUNNER_TEMP/all-features-metadata.json"
+          python3 scripts/gen-vaco-facade.py \
+            --default-metadata "$RUNNER_TEMP/default-metadata.json" \
+            --all-features-metadata "$RUNNER_TEMP/all-features-metadata.json" \
+            --output-dir "$RUNNER_TEMP/vaco-generated"
+          for path in Cargo.toml README.md src/lib.rs src/bin/vvmpeg.rs src/bin/vvprobe.rs tests/command_branding.rs; do
+            diff -u "crates/app/vaco/$path" "$RUNNER_TEMP/vaco-generated/$path"
+          done
+
+      - name: Derive default and all-feature publication plans
+        run: |
+          python3 scripts/plan-publish-migration.py \
+            --root vaco --metadata "$RUNNER_TEMP/default-metadata.json" \
+            > "$RUNNER_TEMP/default-plan.json"
+          python3 scripts/plan-publish-migration.py \
+            --root vaco --metadata "$RUNNER_TEMP/all-features-metadata.json" \
+            > "$RUNNER_TEMP/all-features-plan.json"
+
+      - name: Check exact crates.io names and owners
+        env:
+          EXPECTED_OWNER: ${{ inputs.expected_owner }}
+        run: |
+          python3 scripts/check_crates_io_names.py \
+            --plan "$RUNNER_TEMP/all-features-plan.json" \
+            --expected-owner "$EXPECTED_OWNER" \
+            --evidence-out "$RUNNER_TEMP/crates-io-names.json"
+
+      - name: Audit both publication closures
+        run: |
+          python3 scripts/audit-publish-closure.py \
+            --root vaco --metadata "$RUNNER_TEMP/default-metadata.json"
+          python3 scripts/audit-publish-closure.py \
+            --root vaco --metadata "$RUNNER_TEMP/all-features-metadata.json"
+
+      - name: Verify the installable facade package
+        run: python3 scripts/verify-crates-io-package.py
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vaco-crates-io-readiness
+          path: |
+            ${{ runner.temp }}/default-plan.json
+            ${{ runner.temp }}/all-features-plan.json
+            ${{ runner.temp }}/crates-io-names.json

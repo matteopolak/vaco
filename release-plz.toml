@@ -1,0 +1,22 @@
+[workspace]
+# Release-plz is allowed to prepare version/release PRs, but publication is a
+# separate manually protected workflow. Keeping this configuration publish-free
+# prevents a merge or a routine CI run from sending anything to crates.io.
+dependencies_update = false
+pr_labels = ["release"]
+release_commits = "^(feat|fix|perf|refactor)(\\([^)]*\\))?:"
+git_release_type = "auto"
+release_always = false
+
+[changelog]
+protect_breaking_commits = true
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Refactor" },
+    { message = "^doc", skip = true },
+    { message = "^test", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^chore", skip = true },
+]
