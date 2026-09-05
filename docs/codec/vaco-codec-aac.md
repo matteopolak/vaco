@@ -174,10 +174,12 @@ already matches output plane order: front-centre mono, front stereo, and a
 front `CPE` plus one `LFE` (`2.1`), or a front `CPE` plus back `CPE`
 (`quad`). It also recognises the exact `3.0` PCE shape of one front `SCE` plus
 one front `CPE`, whose centre/front-pair raw order is permuted into
-`FL/FR/FC`. The exact `7.1(wide)` PCE shape of one front `SCE`, two front
-`CPE`s, one back `CPE`, and one `LFE` is likewise verified: its raw order is
-front-centre, front-wide pair, front-left/right pair, back pair, LFE, and it is
-permuted into native `FL/FR/FC/LFE/BL/BR/FLC/FRC` order. More complex PCEs
+`FL/FR/FC`. The corresponding `5.1` PCE shape adds one back `CPE` and one
+`LFE`; its centre/front-pair/back-pair/LFE raw order is permuted into native
+`FL/FR/FC/LFE/BL/BR`. The exact `7.1(wide)` PCE shape of one front `SCE`, two
+front `CPE`s, one back `CPE`, and one `LFE` is likewise verified: its raw order
+is front-centre, front-wide pair, front-left/right pair, back pair, LFE, and it
+is permuted into native `FL/FR/FC/LFE/BL/BR/FLC/FRC` order. More complex PCEs
 retain their exact channel count but remain layout-unspecified until their
 required plane permutation is implemented and verified.
 
@@ -609,6 +611,15 @@ reported 48 packets; Vaco and `ffmpeg -bitexact` each emitted **589,824 bytes**
 (48 × 1024 samples × 3 channels × 4-byte `f32` samples). Its raw
 centre/front-pair order now maps to native `FL/FR/FC`, with per-plane
 correlations from −0.056688 to −0.056060 dB from unity.
+
+A six-non-silent-tone `5.1` AAC-LC ADTS fixture, also encoded with `-aac_pce
+1`, reported 48 packets; Vaco and `ffmpeg -bitexact` each emitted
+**1,179,648 bytes** (48 × 1024 samples × 6 channels × 4-byte `f32` samples).
+Its raw centre/front-pair/back-pair/LFE planes now map to native
+`FL/FR/FC/LFE/BL/BR`. Each native plane correlated from −0.061930 to
+−0.000003 dB from unity; the full cross-plane matrix kept every nonmatching
+pair at or below −20.107762 dB, so the distinct tones prove the permutation
+rather than merely its channel count.
 
 An eight-non-silent-tone `7.1(wide)` AAC-LC ADTS fixture exercises a leading
 PCE shape that ordinary ADTS `channelConfiguration` cannot label directly.

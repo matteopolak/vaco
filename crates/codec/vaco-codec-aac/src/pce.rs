@@ -21,6 +21,7 @@ use vaco_core::Result;
 use vaco_parse_aac::AudioObjectType;
 
 const THREE_0_OUTPUT_PERMUTATION: [usize; 3] = [1, 2, 0];
+const FIVE_ONE_OUTPUT_PERMUTATION: [usize; 6] = [1, 2, 0, 5, 3, 4];
 const WIDE_71_OUTPUT_PERMUTATION: [usize; 8] = [3, 4, 0, 7, 5, 6, 1, 2];
 
 /// One channel-element reference inside a program config element: whether the
@@ -116,6 +117,26 @@ impl ProgramConfigElement {
         )
     }
 
+    fn is_five_one_shape(&self) -> bool {
+        matches!(
+            (
+                self.front.as_slice(),
+                self.side.as_slice(),
+                self.back.as_slice(),
+                self.lfe.as_slice(),
+            ),
+            (
+                [
+                    ChannelElementRef { is_cpe: false, .. },
+                    ChannelElementRef { is_cpe: true, .. }
+                ],
+                [],
+                [ChannelElementRef { is_cpe: true, .. }],
+                [_]
+            )
+        )
+    }
+
     /// The total channel count this element describes: front + side + back
     /// (each pair counting 2) plus one per LFE element. Does not count
     /// associated-data or valid-CC elements — neither carries audio.
@@ -147,6 +168,14 @@ impl ProgramConfigElement {
                 Channel::FrontLeft,
                 Channel::FrontRight,
                 Channel::FrontCenter,
+            ]),
+            _ if self.is_five_one_shape() => ChannelLayout::custom([
+                Channel::FrontLeft,
+                Channel::FrontRight,
+                Channel::FrontCenter,
+                Channel::LowFrequency,
+                Channel::BackLeft,
+                Channel::BackRight,
             ]),
             ([ChannelElementRef { is_cpe: true, .. }], [], [], [_]) => ChannelLayout::custom([
                 Channel::FrontLeft,
@@ -184,6 +213,8 @@ impl ProgramConfigElement {
     pub fn output_permutation(&self) -> Option<&'static [usize]> {
         if self.is_three_zero_shape() {
             Some(&THREE_0_OUTPUT_PERMUTATION)
+        } else if self.is_five_one_shape() {
+            Some(&FIVE_ONE_OUTPUT_PERMUTATION)
         } else if self.is_wide_71_shape() {
             Some(&WIDE_71_OUTPUT_PERMUTATION)
         } else {
@@ -540,6 +571,19 @@ mod tests {
             Some("3.0")
         );
         assert_eq!(pce.output_permutation(), Some(&[1, 2, 0][..]));
+    }
+
+    #[test]
+    fn a_five_one_pce_exposes_its_native_layout_and_permutation() {
+        let bytes = build_51_like_pce();
+        let mut r = BitReader::new(&bytes);
+        let pce = ProgramConfigElement::read(&mut r).unwrap();
+
+        assert_eq!(
+            pce.known_output_layout().and_then(|layout| layout.name()),
+            Some("5.1")
+        );
+        assert_eq!(pce.output_permutation(), Some(&[1, 2, 0, 5, 3, 4][..]));
     }
 
     #[test]
