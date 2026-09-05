@@ -392,17 +392,22 @@ impl HevcDecoder {
                     .skip(1)
                     .all(|&start| start % ctbs_x == 0)
                 && total_ctbs % ctbs_x == 0;
-            // The only non-row-aligned shape proven against a conformance
-            // oracle is WPP-E: the first row is split at CTB 1, and every
-            // later segment starts on a complete row. Keep any other partial
-            // row refused until it has its own exact fixture.
-            let bounded_partial_row = ctbs_x == 2
+            // The only non-row-aligned shapes proven against conformance
+            // oracles are WPP-E and WPP-F: the first row is split after CTU
+            // zero, and every later segment starts on a complete row. Keep
+            // any other partial row refused until it has its own exact
+            // fixture.
+            let bounded_partial_row = ((ctbs_x == 2
                 && slice_starts.first().copied() == Some(0)
-                && slice_starts.get(1).copied() == Some(1)
+                && slice_starts.get(1).copied() == Some(1))
+                || (ctbs_x == 3
+                    && slice_starts.first().copied() == Some(0)
+                    && slice_starts.get(1).copied() == Some(1)
+                    && slice_starts.get(2).copied() == Some(3)))
                 && total_ctbs % ctbs_x == 0
                 && slice_starts
                     .iter()
-                    .skip(2)
+                    .skip(if ctbs_x == 2 { 2 } else { 3 })
                     .all(|&start| start % ctbs_x == 0);
             if !row_aligned && !bounded_partial_row {
                 return Err(Error::Unsupported(
@@ -651,6 +656,7 @@ impl HevcDecoder {
             let mut active_slice_kind = hdr.kind;
             let mut active_cabac_init = hdr.cabac_init;
             let mut active_slice_qp = slice_qp;
+            let mut dependent_context: Option<ContextBank> = None;
             let mut wpp_context: Option<ContextBank> = None;
             for (index, &ebsp) in slice_nals.iter().enumerate() {
                 let start_ctb = slice_starts.get(index).copied().ok_or(Error::InvalidData(
@@ -720,9 +726,15 @@ impl HevcDecoder {
                     (segment_qp, parsed.kind, parsed.cabac_init)
                 };
                 if !parsed.dependent {
+                    dependent_context = None;
                     wpp_context = None;
                 }
-                wpp_context = decode_wpp_rows(
+                let seed_context = if first_col == 0 {
+                    wpp_context
+                } else {
+                    dependent_context
+                };
+                let (last_context, saved_wpp_context) = decode_wpp_rows(
                     &mut self.budget,
                     ebsp,
                     header_rbsp_len,
@@ -737,9 +749,13 @@ impl HevcDecoder {
                     i8::try_from(segment_qp.clamp(0, 51)).unwrap_or(0),
                     segment_kind,
                     segment_cabac_init,
-                    wpp_context,
+                    seed_context,
                     parsed.dependent && first_col != 0,
                 )?;
+                dependent_context = last_context;
+                if saved_wpp_context.is_some() {
+                    wpp_context = saved_wpp_context;
+                }
             }
         } else {
             // §9.3.2.1 starts a fresh arithmetic decoding engine for every
@@ -1372,7 +1388,7 @@ fn decode_wpp_rows(
     cabac_init: bool,
     seed_context: Option<ContextBank>,
     preserve_first_row_qp: bool,
-) -> Result<Option<ContextBank>> {
+) -> Result<(Option<ContextBank>, Option<ContextBank>)> {
     let data_start = ebsp_offset_for_rbsp_len(ebsp, header_rbsp_len);
     let ebsp_slice_data = ebsp.get(data_start..).unwrap_or(&[]);
     if ctbs_x < 2 && entry_point_offsets.is_empty() {
@@ -1381,7 +1397,7 @@ fn decode_wpp_rows(
         decode_wpp_single_column(
             budget, row_bytes, walk, row_start, row_count, ctb_size_i, qp, kind, cabac_init,
         )?;
-        return Ok(None);
+        return Ok((None, None));
     }
     let row_ranges = wpp_row_ranges(
         budget,
@@ -1493,7 +1509,7 @@ fn decode_wpp_row_ranges(
     cabac_init: bool,
     seed_context: Option<ContextBank>,
     preserve_first_row_qp: bool,
-) -> Result<Option<ContextBank>> {
+) -> Result<(Option<ContextBank>, Option<ContextBank>)> {
     // The local row's own context state, as it stood right after CTU column 1
     // finished (§9.3.2.3) -- published once per row into a fixed-size board
     // (Stage 2b step 2, `docs/codec/hevc-wavefront-threading.md`: the same
@@ -1512,6 +1528,7 @@ fn decode_wpp_row_ranges(
     // next row refills it.
     let mut row_rbsp: Vec<u8> = Vec::new();
     let mut last_context = None;
+    let mut saved_wpp_context = None;
 
     for (row_idx, &(start, end)) in row_ranges.iter().enumerate() {
         let row_u32 = row_start.saturating_add(u32::try_from(row_idx).unwrap_or(0));
@@ -1575,6 +1592,7 @@ fn decode_wpp_row_ranges(
             // calls below, neither of which mutates any context.
             if col == 1 {
                 ctx_handoff.publish(row_idx, ctx)?;
+                saved_wpp_context = Some(ctx);
             }
 
             let terminate = cabac.decode_terminate();
@@ -1592,7 +1610,7 @@ fn decode_wpp_row_ranges(
             break;
         }
     }
-    Ok(last_context)
+    Ok((last_context, saved_wpp_context))
 }
 
 /// Refuse, up front, every combination this crate does not implement — see

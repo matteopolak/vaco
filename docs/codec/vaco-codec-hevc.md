@@ -915,6 +915,15 @@ published and Vaco/black-box reference MD5 is
 matches. Other non-row-aligned WPP boundaries and tile pictures remain named
 refusals.
 
+The companion `jctvc-hevc-wpp-f-ericsson-main-2` (`WPP_F_ericsson_MAIN_2`)
+fixture proves the same state split at three CTUs per row: its dependent
+segment continues from CTU zero through CTUs one and two, then the next
+dependent segment begins at the following row and loads the saved second-CTU
+context. The checked-in 31,461-byte stream (SHA-256
+`e8566e0e48509592dfaf7d314b7e292f51cede045559e3c32b447a9822a8b949`) decodes
+to 48 192x240 frames and 3,317,760 exact yuv420p bytes, MD5
+`2aaf16274fe8e799d72fa08a4963850d`.
+
 ## Tile pictures — named refusal verified by a real two-column stream
 
 Tiles remain out of scope because the CTU walk and its neighbour-availability
