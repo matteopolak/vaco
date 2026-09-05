@@ -1,18 +1,12 @@
-//! Video encoders that spawn a user-installed CLI tool as a subprocess
-//! (issue #347, `C-46`).
+//! Video encoders that spawn a user-installed CLI tool as a subprocess.
 //!
 //! # Why this crate exists
 //!
-//! `vaco` will never carry a software H.264 or HEVC encoder — both are
-//! GPL-encumbered (x264/x265) or patent-encumbered in a way this project has
-//! no counterparty to clear (see `planning/research/07-legal-patents-licensing.md`
-//! §5.2). The `exec` backend is the answer this project settled on instead:
-//! spawn the *user's own* installed `x264`/`x265` binary, pipe raw frames in
-//! over a Y4M stream on its stdin, and read the resulting Annex-B elementary
-//! stream back over its stdout. No GPL code and no patent-encumbered
-//! implementation ever enters this crate, this binary, or this process's
-//! address space — the process boundary is the whole point (§4.4 of the
-//! legal register: "prefer the process boundary over the link boundary").
+//! `vaco` will never carry a software H.264 or HEVC encoder: x264/x265 are
+//! GPL- or patent-encumbered without a cleared counterparty. The `exec`
+//! backend instead spawns the user's installed binary, pipes raw frames over
+//! Y4M stdin, and reads Annex-B output from stdout. The process boundary keeps
+//! that implementation outside this crate, binary, and process address space.
 //!
 //! # What is here
 //!
