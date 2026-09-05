@@ -28,7 +28,7 @@
     reason = "clause 8.4.2.2.1's own a..s naming for quarter-pel positions"
 )]
 
-use vaco_codec_dsp_mc::h264::H264McKernels;
+use vaco_codec_dsp_mc::h264::{ChromaJob, H264McKernels};
 
 const fn clip_u8(v: i32) -> u8 {
     if v < 0 {
@@ -184,9 +184,7 @@ fn fill_raw_h(
     h: usize,
     raw_h: &mut [[i32; 16]; 21],
 ) {
-    for r in 0..h + 5 {
-        (kernels.luma_half_raw)(&window[r][..w + 5], &mut raw_h[r][..w]);
-    }
+    (kernels.luma_half_raw)(window, w, h + 5, raw_h);
 }
 
 /// `H[r][ox]`: the clipped horizontal half-pel sample (position `b`) at
@@ -556,6 +554,7 @@ pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(
     clippy::indexing_slicing,
     reason = "array::from_fn bounds dy/dx to 0..2, so dy+1/dx+1 stay within the fixed 3x3 window"
 )]
+#[cfg(test)]
 pub(crate) fn chroma_mc_2x2_with<F: Fn(i32, i32) -> u8>(
     kernels: &H264McKernels,
     fetch: F,
@@ -564,6 +563,22 @@ pub(crate) fn chroma_mc_2x2_with<F: Fn(i32, i32) -> u8>(
     mv_x: i32,
     mv_y: i32,
 ) -> [[u8; 2]; 2] {
+    let job = chroma_mc_job(fetch, x, y, mv_x, mv_y);
+    let mut out = [[[0u8; 2]; 2]; 1];
+    (kernels.chroma_batch)(&[job], &mut out);
+    out[0]
+}
+
+/// Gather one chroma MC request without dispatching it, so a decoder can
+/// collect a macroblock's narrow 2x2 requests into one kernel call.
+#[must_use]
+pub(crate) fn chroma_mc_job<F: Fn(i32, i32) -> u8>(
+    fetch: F,
+    x: i32,
+    y: i32,
+    mv_x: i32,
+    mv_y: i32,
+) -> ChromaJob {
     let int_x = mv_x >> 3;
     let frac_x = mv_x & 7;
     let int_y = mv_y >> 3;
@@ -578,11 +593,11 @@ pub(crate) fn chroma_mc_2x2_with<F: Fn(i32, i32) -> u8>(
             )
         })
     });
-    (kernels.chroma_2x2)(
-        &window,
-        u8::try_from(frac_x).unwrap_or(0),
-        u8::try_from(frac_y).unwrap_or(0),
-    )
+    ChromaJob {
+        src: window,
+        frac_x: u8::try_from(frac_x).unwrap_or(0),
+        frac_y: u8::try_from(frac_y).unwrap_or(0),
+    }
 }
 
 /// Convenience entry for tests; production retains one selected table.

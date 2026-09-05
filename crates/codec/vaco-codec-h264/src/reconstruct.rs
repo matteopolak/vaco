@@ -69,7 +69,7 @@
 
 use vaco_codec_core::picture::{BlockScratch, PlaneView};
 use vaco_codec_dsp_idct::h264::{idct4x4, idct8x8};
-use vaco_codec_dsp_mc::h264::{BiWeight, H264McKernels, UniWeight};
+use vaco_codec_dsp_mc::h264::{BiWeight, ChromaJob, H264McKernels, UniWeight};
 use vaco_limits::Budget;
 
 use crate::dequant::{
@@ -1281,26 +1281,41 @@ fn reconstruct_inter_mb(
         match (p0.as_ref(), p1.as_ref()) {
             (Some(a), Some(b)) => {
                 let params = weights.bi_params(ref_idx0, ref_idx1);
-                for oy in 0..h {
-                    (mc.weight_bi)(
-                        &a[oy][..w],
-                        &b[oy][..w],
-                        &mut pred_mb[row0 + oy][col0..col0 + w],
-                        params,
-                    );
-                }
+                (mc.weight_bi)(
+                    a.as_flattened(),
+                    16,
+                    b.as_flattened(),
+                    16,
+                    &mut pred_mb.as_flattened_mut()[row0 * 16 + col0..],
+                    16,
+                    w,
+                    h,
+                    params,
+                );
             }
             (Some(a), None) => {
                 let params = weights.uni_params(0, ref_idx0);
-                for oy in 0..h {
-                    (mc.weight_uni)(&a[oy][..w], &mut pred_mb[row0 + oy][col0..col0 + w], params);
-                }
+                (mc.weight_uni)(
+                    a.as_flattened(),
+                    16,
+                    &mut pred_mb.as_flattened_mut()[row0 * 16 + col0..],
+                    16,
+                    w,
+                    h,
+                    params,
+                );
             }
             (None, Some(b)) => {
                 let params = weights.uni_params(1, ref_idx1);
-                for oy in 0..h {
-                    (mc.weight_uni)(&b[oy][..w], &mut pred_mb[row0 + oy][col0..col0 + w], params);
-                }
+                (mc.weight_uni)(
+                    b.as_flattened(),
+                    16,
+                    &mut pred_mb.as_flattened_mut()[row0 * 16 + col0..],
+                    16,
+                    w,
+                    h,
+                    params,
+                );
             }
             (None, None) => {}
         }
@@ -1993,7 +2008,7 @@ pub(crate) fn row_reference_reach(row: &[MbSummary]) -> RowReach {
 /// sub-positions -- [`sample_luma_block`]'s chroma counterpart, returning the
 /// 2x2 group together for the same L0/L1-then-combine reason, and because a
 /// banded reference is asked for the region they share exactly once.
-fn sample_chroma_2x2(
+fn gather_chroma_job(
     plane: RefPlane<'_>,
     chroma_width: u32,
     chroma_height: u32,
@@ -2001,8 +2016,7 @@ fn sample_chroma_2x2(
     cy0: i32,
     mv: (i16, i16),
     scratch: &mut ReadScratch,
-    mc: &H264McKernels,
-) -> [[u8; 2]; 2] {
+) -> ChromaJob {
     #[allow(
         clippy::cast_possible_wrap,
         clippy::cast_sign_loss,
@@ -2020,14 +2034,14 @@ fn sample_chroma_2x2(
             RefPlane::Banded(view) => {
                 let Ok(b) = view.block(rx0, ry0, 3, 3, &mut scratch.block) else {
                     scratch.failed = true;
-                    return [[0u8; 2]; 2];
+                    return ChromaJob::default();
                 };
                 let (data, stride) = (b.data, b.stride);
                 let fetch = |ax: i32, ay: i32| -> u8 {
                     let (rx, ry) = ((ax - rx0).max(0) as usize, (ay - ry0).max(0) as usize);
                     data.get(ry * stride + rx).copied().unwrap_or(0)
                 };
-                return crate::interp::chroma_mc_2x2_with(mc, fetch, cx0, cy0, mvx, mvy);
+                return crate::interp::chroma_mc_job(fetch, cx0, cy0, mvx, mvy);
             }
         };
         let fetch = |ax: i32, ay: i32| -> u8 {
@@ -2041,7 +2055,7 @@ fn sample_chroma_2x2(
                 .copied()
                 .unwrap_or(0)
         };
-        crate::interp::chroma_mc_2x2_with(mc, fetch, cx0, cy0, mvx, mvy)
+        crate::interp::chroma_mc_job(fetch, cx0, cy0, mvx, mvy)
     }
 }
 
@@ -2068,10 +2082,14 @@ fn predict_chroma_inter(
     mc: &H264McKernels,
 ) -> [[u8; 8]; 8] {
     let empty = RefPlane::Flat(&[]);
-    let mut out = [[0u8; 8]; 8];
+    let mut jobs0 = [ChromaJob::default(); 16];
+    let mut jobs1 = [ChromaJob::default(); 16];
+    let mut reads0 = [false; 16];
+    let mut reads1 = [false; 16];
     for blk in 0..16u32 {
         let (bx, by) = blk_xy(blk);
-        let info = mb.mv_blocks[(by * 4 + bx) as usize];
+        let index = (by * 4 + bx) as usize;
+        let info = mb.mv_blocks[index];
         let ref_idx0 = info.ref_idx_l0().max(0) as usize;
         let ref_idx1 = info.ref_idx_l1().max(0) as usize;
         let plane0 = ref_list0
@@ -2082,8 +2100,10 @@ fn predict_chroma_inter(
             .map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
         let cx0 = (mb.mb_x * 8 + bx * 2) as i32;
         let cy0 = (mb.mb_y * 8 + by * 2) as i32;
-        let p0 = info.reads_l0().then(|| {
-            sample_chroma_2x2(
+        reads0[index] = info.reads_l0();
+        reads1[index] = info.reads_l1();
+        if reads0[index] {
+            jobs0[index] = gather_chroma_job(
                 plane0,
                 chroma_width,
                 chroma_height,
@@ -2091,11 +2111,10 @@ fn predict_chroma_inter(
                 cy0,
                 info.mv_l0(),
                 scratch,
-                mc,
-            )
-        });
-        let p1 = info.reads_l1().then(|| {
-            sample_chroma_2x2(
+            );
+        }
+        if reads1[index] {
+            jobs1[index] = gather_chroma_job(
                 plane1,
                 chroma_width,
                 chroma_height,
@@ -2103,31 +2122,67 @@ fn predict_chroma_inter(
                 cy0,
                 info.mv_l1(),
                 scratch,
-                mc,
-            )
-        });
+            );
+        }
+    }
 
+    let mut pred0 = [[[0u8; 2]; 2]; 16];
+    let mut pred1 = [[[0u8; 2]; 2]; 16];
+    if reads0.iter().any(|&reads| reads) {
+        (mc.chroma_batch)(&jobs0, &mut pred0);
+    }
+    if reads1.iter().any(|&reads| reads) {
+        (mc.chroma_batch)(&jobs1, &mut pred1);
+    }
+
+    let mut out = [[0u8; 8]; 8];
+    for blk in 0..16u32 {
+        let (bx, by) = blk_xy(blk);
+        let index = (by * 4 + bx) as usize;
+        let info = mb.mv_blocks[index];
+        let ref_idx0 = info.ref_idx_l0().max(0) as usize;
+        let ref_idx1 = info.ref_idx_l1().max(0) as usize;
         let (row0, col0) = ((by * 2) as usize, (bx * 2) as usize);
-        match (p0.as_ref(), p1.as_ref()) {
-            (Some(a), Some(b)) => {
+        match (reads0[index], reads1[index]) {
+            (true, true) => {
                 let params = weights.bi_params(ref_idx0, ref_idx1);
-                for dy in 0..2usize {
-                    (mc.weight_bi)(&a[dy], &b[dy], &mut out[row0 + dy][col0..col0 + 2], params);
-                }
+                (mc.weight_bi)(
+                    pred0[index].as_flattened(),
+                    2,
+                    pred1[index].as_flattened(),
+                    2,
+                    &mut out.as_flattened_mut()[row0 * 8 + col0..],
+                    8,
+                    2,
+                    2,
+                    params,
+                );
             }
-            (Some(a), None) => {
+            (true, false) => {
                 let params = weights.uni_params(0, ref_idx0);
-                for dy in 0..2usize {
-                    (mc.weight_uni)(&a[dy], &mut out[row0 + dy][col0..col0 + 2], params);
-                }
+                (mc.weight_uni)(
+                    pred0[index].as_flattened(),
+                    2,
+                    &mut out.as_flattened_mut()[row0 * 8 + col0..],
+                    8,
+                    2,
+                    2,
+                    params,
+                );
             }
-            (None, Some(b)) => {
+            (false, true) => {
                 let params = weights.uni_params(1, ref_idx1);
-                for dy in 0..2usize {
-                    (mc.weight_uni)(&b[dy], &mut out[row0 + dy][col0..col0 + 2], params);
-                }
+                (mc.weight_uni)(
+                    pred1[index].as_flattened(),
+                    2,
+                    &mut out.as_flattened_mut()[row0 * 8 + col0..],
+                    8,
+                    2,
+                    2,
+                    params,
+                );
             }
-            (None, None) => {}
+            (false, false) => {}
         }
     }
     out

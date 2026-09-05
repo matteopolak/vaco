@@ -16,6 +16,7 @@ full per-tier SIMD matrix (D-08b, #259, see §3).
 |---|---|
 | [`fir`](../../crates/signal/vaco-codec-dsp-mc/src/fir.rs) | `TapSet<N>`, the scalar reference, the dispatched vector kernel, and the two-pass separable composition |
 | [`edge`](../../crates/signal/vaco-codec-dsp-mc/src/edge.rs) | Border-replicated block extraction for an out-of-picture motion vector |
+| [`h264`](../../crates/signal/vaco-codec-dsp-mc/src/h264.rs) | The picture-scoped `H264McKernels` table for qpel luma, batched chroma, and explicit/implicit weighted prediction |
 
 **Scope boundary**, the same shape as `vaco-codec-dsp-idct`'s: a codec crate
 decides its own motion vector, sub-pel position and which [`fir::TapSet`]
@@ -112,17 +113,30 @@ payoff is entirely in the FIR taps.
   (H.264's six-tap) is wired into `vaco-checkasm::kernels::fir_mc` as the
   worked example; extending that table to every tap count a consumer adds is
   the natural next step, following that module's own pattern.
-- **The `Decoder<->KernelSet` batched-dispatch contract (PF-3.2, #125)** is
-  unresolved upstream of this crate (it is `vaco-codec-dsp-mc`'s own listed
-  dependency in #258, per the issue tracker, and is still open with no
-  owner). This crate ships as a plain library a consumer calls directly;
-  wiring a `KernelSet`-shaped batched table on top is that settlement's job,
-  not a guess made here.
+- **H.264's settled decoder contract** is `h264::H264McKernels`. The decoder
+  resolves it once per picture. Luma submits a complete partition window,
+  chroma gathers a macroblock's sixteen 2x2 jobs and submits one batch per
+  reference list, and weighting submits a whole strided block. Keep the
+  scheduling and edge extension in `vaco-codec-h264`; keep only arithmetic
+  over caller-owned buffers here. This boundary prevents per-pixel dispatch
+  and leaves one stable place for D-08b's tier-specific kernels.
+
+`benches/h264.rs` compares those call shapes with the former scalar shapes.
+On an Apple M5 in the 2026-09-05 session (300 samples), the batched raw luma
+pass measured 64.86 ns median versus 120.8 ns (1.86x faster). Whole-block
+single- and bi-weighting measured 27.75 ns versus 25.97 ns and 34.26 ns versus
+30.04 ns; the chroma batch measured 59.33 ns versus 31.99 ns. These latter
+numbers are deliberately retained: the contract amortises dispatch and makes
+wide-lane work possible, but its current scalar bodies are not a speed claim.
+Do not replace them with explicit SIMD until a same-session benchmark and the
+full byte-exact decoder gate both pass.
 
 ## 4. Configuration
 
 None. Every function is a pure transform over caller-owned buffers — no
-env vars, no feature flags. Length mismatches (a `dst` shorter than `src`
+env vars or feature flags. `H264McKernels::select()` uses `vaco-simd`'s runtime
+tier selection, while every current H.264 table entry has the same safe scalar
+body at all tiers. Length mismatches (a `dst` shorter than `src`
 implies, an `extend_edges` block smaller than declared) degrade to writing a
 shorter prefix rather than panicking, matching `vaco-codec-dsp-idct`'s own
 truncate-don't-panic convention for buffers whose sizes ultimately trace

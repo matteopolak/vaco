@@ -20,6 +20,10 @@ divan.workspace = true
 name    = "fir"
 harness = false
 
+[[bench]]
+name    = "h264"
+harness = false
+
 [lints]
 workspace = true
 

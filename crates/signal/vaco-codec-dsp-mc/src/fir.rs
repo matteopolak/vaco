@@ -173,6 +173,7 @@ fn split_mut_at(s: &mut [u8], mid: usize) -> Option<(&mut [u8], &mut [u8])> {
 /// reduce to. `i32` throughout: `N` taps of `u8 * i16` cannot overflow `i32`
 /// for any tap count a real interpolation filter uses.
 #[must_use]
+#[inline(always)]
 pub fn tap_sum<const N: usize>(window: &[u8], coeffs: &[i16; N]) -> i32 {
     let mut acc = 0i32;
     for (t, &c) in coeffs.iter().enumerate() {
@@ -219,6 +220,7 @@ pub fn fir_pass_i32<const N: usize>(src: &[u8], coeffs: &[i16; N], dst_len: usiz
 /// remaining destination untouched. Keeping the destination caller-owned is
 /// what lets a decoder batch several motion-compensation rows behind one
 /// resolved kernel-table call without allocating per row.
+#[inline(always)]
 pub fn fir_pass_i32_into<const N: usize>(src: &[u8], coeffs: &[i16; N], dst: &mut [i32]) {
     let available = src.len().saturating_sub(N.saturating_sub(1));
     let len = dst.len().min(available);
