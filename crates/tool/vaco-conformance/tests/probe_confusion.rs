@@ -1,5 +1,5 @@
 //! Format-probing confusion sweep: for a range of formats the reference
-//! `ffmpeg` binary can write, does `vaco-probe`'s own detector choose the
+//! `ffmpeg` binary can write, does `vvprobe`'s own detector choose the
 //! demuxer `ffprobe` chooses on the same bytes?
 //!
 //! # Why this exists
@@ -27,7 +27,7 @@
 //! # Skips gracefully
 //!
 //! Same §1.5.4 contract as every other test in this crate: no `ffmpeg`/
-//! `ffprobe` on `PATH`, or no `vaco-probe` built yet, and this prints why and
+//! `ffprobe` on `PATH`, or no `vvprobe` built yet, and this prints why and
 //! passes without asserting anything. `cargo test -- --nocapture` shows the
 //! full confusion table either way.
 
@@ -280,8 +280,14 @@ fn probe_binary() -> Option<PathBuf> {
     let under_test = UnderTest::discover();
     if under_test.probe.is_none() {
         println!(
-            "SKIPPED (vaco-probe not built): set VACO_BIN_PROBE or `cargo build -p vaco-probe`"
+            "SKIPPED (vvprobe not built): set VACO_BIN_PROBE or `cargo build -p vaco --bin vvprobe`"
         );
+    }
+    if let Some(path) = &under_test.probe {
+        println!("probe under test: {}", path.display());
+        if under_test.stale.contains(&"vvprobe") {
+            println!("WARNING: probe binary predates workspace source edits");
+        }
     }
     under_test.probe
 }
@@ -493,7 +499,7 @@ fn probe_choice_matches_the_reference_across_the_format_sweep() {
             let ours = match format_name(&probe, &path) {
                 Ok(n) => n,
                 Err(e) => {
-                    println!("{entity}: vaco-probe failed: {e}");
+                    println!("{entity}: vvprobe failed: {e}");
                     format!("<error: {e}>")
                 }
             };
@@ -631,7 +637,7 @@ fn raw_audio_stream_fields_match_the_reference() {
         let ours = stream_fields(&probe, &fixture);
         assert!(
             ours.is_ok(),
-            "{extension}: vaco-probe stream fields: {}",
+            "{extension}: vvprobe stream fields: {}",
             ours.as_ref().err().map_or("unknown error", String::as_str)
         );
         let Ok(ours) = ours else { return };

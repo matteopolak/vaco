@@ -111,7 +111,7 @@ inherit the same values, so it cannot skew a comparison.
 
 `tests/probe_confusion.rs` contains small black-box slices alongside the
 manifest-driven suites. Each creates its fixture with the reference `ffmpeg`
-binary, queries both `ffprobe` and `vaco-probe`, and discards the fixture when
+binary, queries both `ffprobe` and `vvprobe`, and discards the fixture when
 the test ends. The detector sweep checks the selected format and packet count
 across container and raw-format families; the raw-audio metadata slice checks
 `codec_name`, `sample_rate`, `channels`, and `time_base` for ADTS AAC, AC-3,
@@ -124,6 +124,14 @@ or attributed to timestamp rounding. Extend the case table with another
 independent format family when adding a probe field; keep a fixture's encoding
 arguments and the compared fields in the test so the oracle measurement stays
 reproducible.
+
+Build the facade's probe with `cargo build -p vaco --bin vvprobe`. Discovery
+looks for `vvprobe` and `vvmpeg` under `CARGO_TARGET_DIR` (or the workspace
+`target/` when unset), checking `debug/` before `release/`. It never falls back
+to old `vaco-probe` or `vaco` executables. Explicit `VACO_BIN_PROBE` and
+`VACO_BIN_VACO` paths still take precedence; a missing explicit path means the
+tool is unavailable. For a private `--target-dir` build, set `CARGO_TARGET_DIR`
+to that same directory or pass the built executable via `VACO_BIN_PROBE`.
 
 Output is drained on dedicated threads while the main thread waits for exit. The
 obvious implementation (wait, then read) deadlocks the moment a child fills a

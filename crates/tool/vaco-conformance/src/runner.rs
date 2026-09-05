@@ -14,7 +14,7 @@
 //! - **The reference.** `cargo test` must pass on a machine without `FFmpeg`
 //!   (§1.5.4), so a missing reference skips every case with the message
 //!   [`crate::refbin::discover`] produced.
-//! - **The binary under test.** `vaco-probe` and `vaco` do not exist yet. A
+//! - **The binary under test.** `vvprobe` and `vvmpeg` are built by `vaco`. A
 //!   case whose tool is not built skips with a message naming the binary and
 //!   the environment variable that would point at it.
 //!
@@ -234,7 +234,7 @@ pub struct UnderTest {
     pub transcode: Option<PathBuf>,
     /// Our ffplay equivalent.
     pub play: Option<PathBuf>,
-    /// Labels (`"vaco-probe"`/`"vaco"`/`"vaco-play"`) of every binary above
+    /// Labels (`"vvprobe"`/`"vvmpeg"`/`"vaco-play"`) of every binary above
     /// whose mtime predates the newest `.rs` file under `crates/` — see this
     /// struct's own doc. Empty when the source tree could not be found
     /// (e.g. this crate built and shipped standalone) rather than treating
@@ -247,8 +247,8 @@ impl UnderTest {
     /// then the workspace's shared `target/`.
     #[must_use]
     pub fn discover() -> Self {
-        let probe = find("VACO_BIN_PROBE", "vaco-probe");
-        let transcode = find("VACO_BIN_VACO", "vaco");
+        let probe = find("VACO_BIN_PROBE", "vvprobe");
+        let transcode = find("VACO_BIN_VACO", "vvmpeg");
         let play = find("VACO_BIN_PLAY", "vaco-play");
 
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -259,8 +259,8 @@ impl UnderTest {
         let mut stale = Vec::new();
         if let Some(newest_source) = newest_source {
             for (label, bin) in [
-                ("vaco-probe", &probe),
-                ("vaco", &transcode),
+                ("vvprobe", &probe),
+                ("vvmpeg", &transcode),
                 ("vaco-play", &play),
             ] {
                 if bin
@@ -858,7 +858,7 @@ impl<'a> Runner<'a> {
     /// remux matrix asks for: stream count, codecs, durations, timestamps,
     /// not byte layout.
     ///
-    /// Skips (does not fail) when `vaco-probe` is not built — a case that
+    /// Skips (does not fail) when `vvprobe` is not built — a case that
     /// wants this needs *two* binaries under test, and a missing one is
     /// coverage that erodes, not a divergence.
     fn probe_produced_files(
@@ -887,7 +887,7 @@ impl<'a> Runner<'a> {
                 case: case.clone(),
                 verdict: Verdict::Skipped(SkipReason::ToolNotBuilt(
                     "structural comparison of a transcode case's output needs \
-                     `vaco-probe`; set VACO_BIN_PROBE or `cargo build` it"
+                     `vvprobe`; set VACO_BIN_PROBE or `cargo build -p vaco --bin vvprobe`"
                         .to_owned(),
                 )),
                 ours_command: String::new(),
