@@ -4721,6 +4721,15 @@ pub const DEFAULT_COEFF_BR_CDF: [[[[[u16; 5]; 21]; 2]; 5]; 4] = [
 /// `Default_Filter_Intra_Mode_Cdf`, spec 9.4.
 pub const DEFAULT_FILTER_INTRA_MODE_CDF: [u16; 6] = [8949, 12776, 17211, 29558, 32768, 0];
 
+/// `Default_Use_Wiener_Cdf`, spec 9.4.
+pub const DEFAULT_USE_WIENER_CDF: [u16; 3] = [11570, 32768, 0];
+
+/// `Default_Use_Sgrproj_Cdf`, spec 9.4.
+pub const DEFAULT_USE_SGRPROJ_CDF: [u16; 3] = [16855, 32768, 0];
+
+/// `Default_Restoration_Type_Cdf`, spec 9.4.
+pub const DEFAULT_RESTORATION_TYPE_CDF: [u16; 4] = [9413, 22581, 32768, 0];
+
 /// `Default_Filter_Intra_Cdf`, spec 9.4.
 pub const DEFAULT_FILTER_INTRA_CDF: [[u16; 3]; 22] = [
     [4621, 32768, 0],

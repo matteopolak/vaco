@@ -48,6 +48,9 @@ fn pick<T: Copy, const M: usize>(arr: [T; M], q: usize) -> T {
 /// context.
 #[derive(Debug, Clone)]
 pub struct TileCdf {
+    pub use_wiener: Cdf<3>,
+    pub use_sgrproj: Cdf<3>,
+    pub restoration_type: Cdf<4>,
     pub intra_frame_y_mode: [[Cdf<14>; 5]; 5],
     pub uv_mode_cfl_not_allowed: [Cdf<14>; 13],
     pub uv_mode_cfl_allowed: [Cdf<15>; 13],
@@ -122,6 +125,9 @@ impl TileCdf {
     pub fn new(base_q_idx: u8) -> Self {
         let q = qctx(base_q_idx);
         Self {
+            use_wiener: d::DEFAULT_USE_WIENER_CDF,
+            use_sgrproj: d::DEFAULT_USE_SGRPROJ_CDF,
+            restoration_type: d::DEFAULT_RESTORATION_TYPE_CDF,
             intra_frame_y_mode: d::DEFAULT_INTRA_FRAME_Y_MODE_CDF,
             uv_mode_cfl_not_allowed: d::DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF,
             uv_mode_cfl_allowed: d::DEFAULT_UV_MODE_CFL_ALLOWED_CDF,

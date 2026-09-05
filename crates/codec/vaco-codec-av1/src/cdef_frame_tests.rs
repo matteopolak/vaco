@@ -62,6 +62,8 @@ fn context(budget: &mut Budget) -> FrameCtx {
             16
         ],
         pic,
+        pre_cdef: None,
+        restoration_units: std::array::from_fn(|_| Vec::new()),
         last_quant: Vec::new(),
     }
 }
@@ -120,6 +122,8 @@ fn zero_index_bits_still_assign_entry_zero_on_the_first_non_skip_block() {
         mi_row_end: 4,
         mi_col_start: 0,
         mi_col_end: 4,
+        ref_sgr_xqd: [[-32, 31]; 3],
+        ref_lr_wiener: [[[3, -7, 15]; 2]; 3],
     };
     read_cdef(&mut ctx, &mut tile, 0, 0, BLOCK_8X8, true);
     assert_eq!(ctx.cdef_idx[0], -1);

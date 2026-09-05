@@ -6,8 +6,8 @@ the plane modes and restoration unit sizes from section 5.9.20.
 
 ## How it works
 
-`restore_plane` takes two immutable, already-upscaled planes: the deblocked
-image before CDEF and the image after CDEF. Pixels inside the current stripe
+`restore_plane` takes two immutable, already-upscaled planes: the pre-CDEF
+image and the image after CDEF. Pixels inside the current stripe
 come from the latter; the two rows on either side come from the former. A
 request for a third outside row repeats the second. Frame edges clamp to the
 visible dimensions, excluding allocation padding.
@@ -29,27 +29,40 @@ ranges, source samples and the exact number of restoration units.
 
 ## Integration boundary
 
-The decoder currently calls `FrameRestoration::check_scope` before decoding
-tiles. Frames selecting restoration return a named `Unsupported` error:
-their tile-unit entropy syntax is not implemented, and continuing would
-misinterpret restoration coefficients as block data. Standalone filter
-tests do not establish end-to-end AV1 or Argon conformance.
+The decoder supports active restoration for a single tile without
+superresolution. Before each superblock partition it reads sections 5.11.57–
+5.11.58, adapts the three restoration CDFs, retains the tile's Wiener/SGR
+reference coefficients, and writes the resulting row-major `RestorationUnit`
+maps. After tile reconstruction it copies the pre-CDEF image, runs CDEF, and
+then supplies that pre-CDEF copy plus the CDEF image to `restore_plane`.
 
-To integrate, decode section 5.11.57–5.11.58 unit symbols before each
-superblock, maintain tile-local coefficient reference state, and populate
-the row-major `RestorationUnit` map. Preserve deblocked pixels before CDEF,
-upscale both source images, then call restoration after CDEF/superresolution.
-Remove the scope refusal only with independent full-frame measurements.
-The crate's remaining inter/deblocking/superresolution gaps still apply.
+Active multi-tile streams return `Unsupported("AV1 loop restoration multi-tile
+unit state")`: independent tile coefficient state and partial tile groups are
+not retained by this bounded path. Active superresolution streams return
+`Unsupported("AV1 loop restoration with superresolution")`: `FrameSize` does
+not retain the coded superresolution denominator needed to map restoration
+unit columns correctly. These refusals happen before tile entropy decoding;
+they are deliberate scope boundaries, not fallback pixel output.
+
+Active streams with a nonzero deblocking level return `Unsupported("AV1 loop
+restoration requires unavailable deblocking")`. The decoder retains the parsed
+levels solely for this check: its reconstruction buffer is the required
+pre-CDEF source only while deblocking is disabled. This refusal also occurs
+before tile entropy decoding.
+
+The crate's remaining inter/deblocking gaps still apply. The Argon corpus
+entry remains unavailable, so this does not establish the issue's Argon
+acceptance criterion by itself.
 
 ## How to change it
 
-The implementation is in `src/restoration.rs`; `frame_header.rs` owns
-`lr_params` parsing. `tests/restoration.rs` covers geometry, parameter
-validation and reference pixels. Keep the pre-CDEF source separate when
-changing buffering: overwriting it with CDEF output produces errors near
-every stripe boundary. Filter across horizontal unit boundaries using
-source pixels, even when adjacent units choose different filters.
+The scalar implementation is in `src/restoration.rs`; `frame_header.rs` owns
+`lr_params` parsing, while `decode.rs` owns tile entropy parsing, source-image
+lifetime and the explicit scope checks. `tests/restoration.rs` covers geometry,
+parameter validation and reference pixels. Keep the pre-CDEF source separate
+when changing buffering: overwriting it with CDEF output produces errors near
+every stripe boundary. Filter across horizontal unit boundaries using source
+pixels, even when adjacent units choose different filters.
 
 No performance claims are made for this scalar reference implementation.
 Profile the real integrated pipeline before changing its buffering or
@@ -85,10 +98,32 @@ input 1023 with SGR set 0 and `xqd = [-32, 31]` produces 1022 in both dav1d
 and this implementation. The test compares independent reference pixels;
 it does not enforce an invented constant-preservation rule.
 
-The five restoration integration tests and two restoration-header tests
-pass. These are isolated filter/header results. The Argon entry in
-`crates/tool/vaco-corpus/vaco-media.lock` remains a documented gap with no
-fetchable stream, and decoder integration remains refused.
+Measured on 2026-09-05: the active single-tile decoder fixture below produces
+one 128×128 YUV420 frame (24,576 bytes) equal to dav1d in every byte. The
+fixture selected restoration—the pre-integration scope probe rejected it—so
+this exercises tile-unit entropy parsing, CDF adaptation, the distinct
+pre-CDEF source and scalar filtering rather than merely reaching a disabled
+stage. The Argon entry in `crates/tool/vaco-corpus/vaco-media.lock` remains a
+documented gap with no fetchable stream.
+
+## Reproducing the full-pipeline fixture
+
+The checked-in `tests/fixtures/restoration-checker.obu` is a 128×128 8-pixel
+checkerboard encoded by the `ffmpeg` binary with libsvtav1 v4.2.0; its dav1d
+1.5.4 YUV output is `restoration-checker_ref.yuv`.
+
+```sh
+ffmpeg -y -v error -f lavfi -i "nullsrc=size=128x128,geq=lum='if(lt(mod(floor(X/8)+floor(Y/8),2),1),48,208)':cb=128:cr=128" \
+  -frames:v 1 -pix_fmt yuv420p -c:v libsvtav1 -qp 60 \
+  -svtav1-params "enable-dlf=0:enable-cdef=0:enable-restoration=1:enable-tf=0:enable-kf-tf=0:scm=0:enable-intrabc=0:aq-mode=0:lookahead=0" \
+  -f obu restoration-checker.obu
+dav1d --quiet --inloopfilters all -i restoration-checker.obu \
+  -o restoration-checker_ref.yuv --muxer yuv
+```
+
+The OBU is 406 bytes (`7bea07916669c27cbc32e787b58b663d40a9407eab2f6e4e5b4afb602dd35a74`)
+and the reference is 24,576 bytes
+(`5b8d3439f7c9fa68876c08be9ed507da952fc2e2dd03efd0bd296974dfd56b66`).
 
 ## Reproducing the oracle
 

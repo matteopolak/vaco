@@ -6,10 +6,9 @@ end: OBU/sequence/frame header, the symbol decoder and its adaptive CDF
 machinery, the tile/superblock/partition/mode-info walk, coefficient
 decode, dequantization, inverse transforms, and intra prediction (basic/
 Paeth, DC, smooth, directional with the intra edge filter and upsampling,
-and CFL), followed by CDEF and scalar super-resolution. Inter prediction,
-deblocking/loop restoration, film grain, threading/DPB management and Argon
-conformance are explicitly
-out of scope — later work, other crates.
+and CFL), followed by CDEF, scalar super-resolution, and bounded scalar loop
+restoration. Inter prediction, deblocking, film grain, threading/DPB management
+and Argon conformance are explicitly out of scope — later work, other crates.
 
 ## What it is
 
@@ -26,9 +25,10 @@ direct decoder callers and tests use the shared symbol engine.
 | `symbol.rs` | Compatibility re-export of `vaco-codec-msac::av1::SymbolDecoder`; the shared crate owns §8.2's range arithmetic and CDF adaptation |
 | `cdf.rs` | `TileCdf` — one fresh copy of every default CDF array (§9.4) this crate's syntax-element set reads, built once per tile; `qctx()`'s base_q_idx bucketing for the four coefficient-table families |
 | `tables.rs` + `tables/{default_cdf,scan,conversion,quant}.rs` | mechanically-extracted spec tables (default CDFs, scan orders, size/context conversion tables, quantizer lookups) |
-| `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — intra frame syntax, including retained CDEF strengths/damping and restoration modes; deblocking and film-grain parameters remain syntax-only |
+| `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — intra frame syntax, including retained CDEF strengths/damping, restoration modes, and loop-filter levels used to refuse restoration that would need unavailable deblocking |
 | `cdef.rs` | Direction search, constrained filtering, variance adaptation, damping, and chroma direction mapping; see [CDEF](../av1-cdef.md) for oracle coverage and remaining frame-conformance gaps |
 | `superres.rs` | AV1 §7.16's post-CDEF horizontal eight-tap upscaler; see [AV1 super-resolution](../av1-superres.md) for oracle coverage and the inter-reference boundary |
+| `restoration.rs` | AV1 §7.17 scalar Wiener and self-guided restoration; see [AV1 loop restoration](../av1-loop-restoration.md) for the oracle and active-stream refusals |
 | `transform.rs` | `Av1TxType`, `inverse_transform_2d` — the full §7.13 inverse DCT/ADST/WHT/identity transform network |
 | `predict.rs` | `predict_intra`/`predict_chroma_from_luma` — §7.11.2/§7.11.5 |
 | `framebuf.rs` | `Picture`/`Plane` — the private `u16`-backed reconstruction buffer intra prediction needs (reads already-written pixels of the buffer being written) |
@@ -55,13 +55,14 @@ reconstruction buffer, per-frame flags) and calls `decode_tiles` →
 `residual`/`transform_block` → `coeffs` (§5.11.39) + `reconstruct`
 (§7.12.3's dequantize/inverse-transform/add).
 
-After tile reconstruction, CDEF runs first and `superres::upscale_picture`
-runs second when the frame header sets `use_superres`; only then are the
-visible planes copied to `Frame`. The superres filter derives phase from the
-coded visible width but clamps its eight taps to the Mi-padded reconstruction
-plane, which is why it must precede that final copy. See
-[AV1 super-resolution](../av1-superres.md) for the exact oracle and table
-provenance.
+After tile reconstruction, active restoration retains a pre-CDEF copy, then
+CDEF runs, then `superres::upscale_picture` runs when the frame header sets
+`use_superres`, and finally restoration runs. The bounded restoration path
+refuses multi-tile, superresolution, and nonzero-deblocking frames by name;
+the supported single-tile geometry is covered byte-for-byte against dav1d.
+See [AV1 super-resolution](../av1-superres.md) and [AV1 loop
+restoration](../av1-loop-restoration.md) for the respective oracle and scope
+boundaries.
 
 Since `is_inter` is always `0` here, two specification branches collapse
 away entirely and are not implemented at all: `read_block_tx_size()`'s

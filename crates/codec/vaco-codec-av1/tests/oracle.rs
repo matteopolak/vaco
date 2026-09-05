@@ -271,3 +271,55 @@ fn checkerboard_dc_pred_dct_dct_matches_ffmpeg_byte_for_byte() {
         .expect("decode of a real libsvtav1 checkerboard keyframe must not fail");
     assert_luma_matches("checker", &luma, &reference[..64 * 64], 64, 64);
 }
+
+#[test]
+/// A real, single-tile active-restoration frame; the decoder's temporary
+/// scope probe rejected this exact OBU before the tile parser was integrated.
+/// Regenerate with `ffmpeg`/`dav1d` as recorded in `docs/av1-loop-restoration.md`.
+fn restoration_checkerboard_matches_dav1d_in_every_plane() {
+    let fixture: &[u8] = include_bytes!("fixtures/restoration-checker.obu");
+    let reference: &[u8] = include_bytes!("fixtures/restoration-checker_ref.yuv");
+    let mut decoder = Av1Decoder::new(Limits::default());
+    let mut budget = Budget::new(Limits::default());
+    let packet = Packet::from_slice(&mut budget, fixture).unwrap();
+    decoder.send_packet(Some(&packet)).unwrap();
+    decoder.send_packet(None).unwrap();
+    let frame = decoder
+        .receive_frame()
+        .expect("active restoration fixture must decode");
+    let mut actual = Vec::new();
+    for plane_index in 0..3 {
+        let (plane_width, plane_height) = if plane_index == 0 {
+            (128, 128)
+        } else {
+            (64, 64)
+        };
+        let plane = frame.plane(plane_index).unwrap();
+        for y in 0..plane_height {
+            actual.extend_from_slice(&plane.row(y).unwrap()[..plane_width]);
+        }
+    }
+    assert_eq!(actual.len(), 128 * 128 * 3 / 2, "restoration byte count");
+    let differences = actual
+        .iter()
+        .zip(reference)
+        .filter(|(ours, oracle)| ours != oracle)
+        .count();
+    let max_difference = actual
+        .iter()
+        .zip(reference)
+        .map(|(ours, oracle)| {
+            i16::from(*ours)
+                .saturating_sub(i16::from(*oracle))
+                .unsigned_abs()
+        })
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        differences,
+        0,
+        "restoration Y/U/V samples: {differences}/{} differ, max {max_difference}",
+        reference.len()
+    );
+    assert!(matches!(decoder.receive_frame(), Err(Error::Eof)));
+}

@@ -191,6 +191,9 @@ pub struct FrameHeader {
     pub reduced_tx_set: bool,
     /// Retained plane modes and unit sizes from `lr_params()`, §5.9.20.
     pub restoration: FrameRestoration,
+    /// Loop-filter levels retained so dependent post-filters can reject an
+    /// unavailable deblocked source instead of using reconstructed pixels.
+    pub loop_filter: LoopFilterParams,
     /// Index width per 64x64 unit (§5.9.19/§5.11.56). Zero bits can mean
     /// an enabled single-entry table; `cdef.enabled` distinguishes disablement.
     pub cdef_bits: u32,
@@ -420,7 +423,7 @@ fn parse_inner(
     }
     let all_lossless = coded_lossless && size.coded_width == size.upscaled_width;
 
-    parse_loop_filter_params(r, seq, coded_lossless, allow_intrabc, num_planes);
+    let loop_filter = parse_loop_filter_params(r, seq, coded_lossless, allow_intrabc, num_planes);
     let (cdef_bits, cdef) = parse_cdef_params(r, seq, coded_lossless, allow_intrabc, num_planes);
     let restoration = parse_lr_params(r, seq, all_lossless, allow_intrabc, num_planes);
 
@@ -458,6 +461,7 @@ fn parse_inner(
         tx_mode,
         reduced_tx_set,
         restoration,
+        loop_filter,
         cdef_bits,
         cdef,
     })
@@ -763,21 +767,40 @@ fn parse_delta_params(r: &mut BitReader<'_>, base_q_idx: u8, allow_intrabc: bool
     delta
 }
 
+/// Retained `loop_filter_params()` levels, §5.9.18.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoopFilterParams {
+    /// Y vertical, Y horizontal, U, and V levels.
+    pub levels: [u8; 4],
+}
+
+impl LoopFilterParams {
+    /// Whether the unimplemented deblocking stage would modify this frame.
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        self.levels.iter().any(|&level| level != 0)
+    }
+}
+
 fn parse_loop_filter_params(
     r: &mut BitReader<'_>,
     seq: &SequenceHeader,
     coded_lossless: bool,
     allow_intrabc: bool,
     num_planes: u32,
-) {
+) -> LoopFilterParams {
     if coded_lossless || allow_intrabc {
-        return;
+        return LoopFilterParams::default();
     }
-    let level0 = r.get(6);
-    let level1 = r.get(6);
-    if num_planes > 1 && (level0 != 0 || level1 != 0) {
-        let _level2 = r.get(6);
-        let _level3 = r.get(6);
+    let mut levels = [
+        u8::try_from(r.get(6)).unwrap_or(0),
+        u8::try_from(r.get(6)).unwrap_or(0),
+        0,
+        0,
+    ];
+    if num_planes > 1 && (levels[0] != 0 || levels[1] != 0) {
+        levels[2] = u8::try_from(r.get(6)).unwrap_or(0);
+        levels[3] = u8::try_from(r.get(6)).unwrap_or(0);
     }
     let _sharpness = r.get(3);
     let delta_enabled = r.get_bit() != 0;
@@ -797,6 +820,7 @@ fn parse_loop_filter_params(
         }
     }
     let _ = seq;
+    LoopFilterParams { levels }
 }
 
 fn parse_cdef_params(
@@ -1019,7 +1043,7 @@ mod tests {
         );
         assert_eq!(params.unit_size, [256, 128, 128]);
         assert_eq!(bits.bit_pos(), 9);
-        assert!(params.check_scope().is_err());
+        assert!(params.is_active());
 
         seq.use_128x128_superblock = true;
         // Y=Wiener; the 128x128-superblock branch consumes only one shift bit.
@@ -1041,14 +1065,31 @@ mod tests {
             seq.enable_restoration = enabled;
             let mut bits = BitReader::new(&[255]);
             let params = parse_lr_params(&mut bits, &seq, lossless, intrabc, 3);
-            assert!(params.check_scope().is_ok());
+            assert!(!params.is_active());
             assert_eq!(bits.bit_pos(), 0);
         }
         seq.enable_restoration = true;
         let mut bits = BitReader::new(&[0]);
         let params = parse_lr_params(&mut bits, &seq, false, false, 3);
-        assert!(params.check_scope().is_ok());
+        assert!(!params.is_active());
         assert_eq!(bits.bit_pos(), 6);
+    }
+
+    #[test]
+    fn loop_filter_levels_are_retained_for_postfilter_scope_checks() {
+        let seq = seq_header();
+        // Levels 1, 2, 3, 4; sharpness 0; delta disabled.
+        let mut bits = BitReader::new(&[0x04, 0x20, 0xc4, 0]);
+        let params = parse_loop_filter_params(&mut bits, &seq, false, false, 3);
+        assert_eq!(params.levels, [1, 2, 3, 4]);
+        assert!(params.is_active());
+        assert_eq!(bits.bit_pos(), 28);
+
+        let mut bits = BitReader::new(&[0, 0]);
+        let params = parse_loop_filter_params(&mut bits, &seq, false, false, 3);
+        assert_eq!(params.levels, [0; 4]);
+        assert!(!params.is_active());
+        assert_eq!(bits.bit_pos(), 16);
     }
 
     #[test]

@@ -35,6 +35,7 @@ use crate::cdf::TileCdf;
 use crate::frame_header::{self, FrameHeader};
 use crate::framebuf::{Picture, Plane};
 use crate::predict::{self, PredMode};
+use crate::restoration::{self, PlaneConfig, RestorationType, RestorationUnit};
 use crate::symbol::SymbolDecoder;
 use crate::tables;
 use crate::transform::{self, Av1TxType};
@@ -172,6 +173,8 @@ struct TileState<'a> {
     mi_row_end: usize,
     mi_col_start: usize,
     mi_col_end: usize,
+    ref_sgr_xqd: [[i16; 2]; 3],
+    ref_lr_wiener: [[[i16; 3]; 2]; 3],
 }
 
 /// Whole-frame state threaded through the partition/block walk.
@@ -200,6 +203,10 @@ struct FrameCtx {
     cdef_stride: usize,
     grid: Vec<MiCell>,
     pic: Picture,
+    /// The pre-CDEF reconstruction image, retained for restoration stripe
+    /// boundaries while CDEF writes its separate image.
+    pre_cdef: Option<Picture>,
+    restoration_units: [Vec<RestorationUnit>; 3],
     /// The most recently decoded transform block's `Quant[]` array,
     /// handed from [`coeffs`] to [`reconstruct`] — both operate on exactly
     /// one transform block at a time, so a single scratch buffer (taken via
@@ -493,7 +500,7 @@ fn decode_frame(
     tile_group_payload: &[u8],
     budget: &mut Budget,
 ) -> Result<Frame> {
-    fh.restoration.check_scope()?;
+    check_restoration_scope(fh)?;
     let mi_cols = 2 * ((fh.size.coded_width + 7) >> 3);
     let mi_rows = 2 * ((fh.size.coded_height + 7) >> 3);
     let (mi_cols, mi_rows) = (mi_cols as usize, mi_rows as usize);
@@ -523,13 +530,196 @@ fn decode_frame(
         cdef_stride: mi_cols.div_ceil(16),
         grid: vec![MiCell::default(); mi_cols * mi_rows],
         pic,
+        pre_cdef: None,
+        restoration_units: std::array::from_fn(|_| Vec::new()),
         last_quant: Vec::new(),
     };
 
+    init_restoration_units(&mut ctx)?;
     decode_tiles(&mut ctx, tile_group_payload)?;
+    if ctx.header.restoration.is_active() {
+        ctx.pre_cdef = Some(copy_picture(&ctx.pic, budget)?);
+    }
     apply_cdef(&mut ctx, budget)?;
     apply_superres(&mut ctx, budget)?;
+    apply_restoration(&mut ctx, budget)?;
     pic_to_frame(budget, seq, fh, &ctx.pic)
+}
+
+/// Keep only geometries whose tile-unit coordinates and source images this
+/// decoder retains exactly; every other active stream fails before entropy data.
+fn check_restoration_scope(fh: &FrameHeader) -> Result<()> {
+    if !fh.restoration.is_active() {
+        return Ok(());
+    }
+    if fh.tile_info.cols != 1 || fh.tile_info.rows != 1 {
+        return Err(Error::Unsupported(
+            "AV1 loop restoration multi-tile unit state",
+        ));
+    }
+    if fh.size.use_superres {
+        return Err(Error::Unsupported(
+            "AV1 loop restoration with superresolution",
+        ));
+    }
+    if fh.loop_filter.is_active() {
+        return Err(Error::Unsupported(
+            "AV1 loop restoration requires unavailable deblocking",
+        ));
+    }
+    Ok(())
+}
+
+fn restoration_plane_config(ctx: &FrameCtx, plane: usize) -> Result<PlaneConfig> {
+    let chroma = plane != 0;
+    let sx = u32::from(chroma && ctx.subsampling_x);
+    let sy = u32::from(chroma && ctx.subsampling_y);
+    let unit_size = ctx
+        .header
+        .restoration
+        .unit_size
+        .get(plane)
+        .copied()
+        .unwrap_or(0);
+    if unit_size == 0 {
+        return Err(Error::InvalidData(
+            "AV1 active restoration has no unit size",
+        ));
+    }
+    Ok(PlaneConfig {
+        width: usize::try_from(ctx.header.size.upscaled_width).unwrap_or(0) >> sx,
+        height: usize::try_from(ctx.header.size.coded_height).unwrap_or(0) >> sy,
+        bit_depth: ctx.bit_depth,
+        unit_size,
+        subsampling_y: chroma && ctx.subsampling_y,
+    })
+}
+
+fn init_restoration_units(ctx: &mut FrameCtx) -> Result<()> {
+    if !ctx.header.restoration.is_active() {
+        return Ok(());
+    }
+    for plane in 0..3 {
+        let mode = ctx
+            .header
+            .restoration
+            .types
+            .get(plane)
+            .copied()
+            .unwrap_or(RestorationType::None);
+        if mode == RestorationType::None {
+            continue;
+        }
+        let (cols, rows) = restoration_plane_config(ctx, plane)?.unit_counts();
+        let units = cols
+            .checked_mul(rows)
+            .ok_or(Error::InvalidData("AV1 restoration unit map length"))?;
+        let map = ctx
+            .restoration_units
+            .get_mut(plane)
+            .ok_or(Error::InvalidData("AV1 restoration plane index"))?;
+        *map = vec![RestorationUnit::None; units];
+    }
+    Ok(())
+}
+
+fn picture_bytes(pic: &Picture) -> u64 {
+    [pic.plane(0), pic.plane(1), pic.plane(2)]
+        .into_iter()
+        .flatten()
+        .map(|plane| {
+            u64::try_from(plane.as_slice().len())
+                .unwrap_or(0)
+                .saturating_mul(2)
+        })
+        .sum()
+}
+
+fn copy_picture(source: &Picture, budget: &mut Budget) -> Result<Picture> {
+    let mut copy = Picture::new(
+        budget,
+        source.y.width(),
+        source.y.height(),
+        source.u.as_ref().map_or(0, Plane::width),
+        source.u.as_ref().map_or(0, Plane::height),
+        source.u.is_none(),
+    )?;
+    for plane in 0..3 {
+        if let (Some(input), Some(output)) = (source.plane(plane), copy.plane_mut(plane)) {
+            for y in 0..input.height() {
+                for x in 0..input.width() {
+                    output.set(x, y, input.get_clamped(ix(x), ix(y)));
+                }
+            }
+        }
+    }
+    Ok(copy)
+}
+
+fn copy_visible_plane(source: &Plane, config: PlaneConfig, budget: &mut Budget) -> Result<Plane> {
+    let mut output = Plane::new(budget, config.width, config.height)?;
+    for y in 0..config.height {
+        for x in 0..config.width {
+            output.set(x, y, source.get_clamped(ix(x), ix(y)));
+        }
+    }
+    Ok(output)
+}
+
+fn restored_plane(
+    ctx: &FrameCtx,
+    before: &Picture,
+    after: &Picture,
+    plane: usize,
+    budget: &mut Budget,
+) -> Result<Plane> {
+    let config = restoration_plane_config(ctx, plane)?;
+    let input = before
+        .plane(plane)
+        .ok_or(Error::InvalidData("AV1 restoration pre-CDEF plane"))?;
+    let filtered = after
+        .plane(plane)
+        .ok_or(Error::InvalidData("AV1 restoration post-CDEF plane"))?;
+    let mode = ctx
+        .header
+        .restoration
+        .types
+        .get(plane)
+        .copied()
+        .unwrap_or(RestorationType::None);
+    if mode == RestorationType::None {
+        return copy_visible_plane(filtered, config, budget);
+    }
+    let units = ctx
+        .restoration_units
+        .get(plane)
+        .ok_or(Error::InvalidData("AV1 restoration plane unit map"))?;
+    restoration::restore_plane(input, filtered, config, units, budget)
+}
+
+fn apply_restoration(ctx: &mut FrameCtx, budget: &mut Budget) -> Result<()> {
+    if !ctx.header.restoration.is_active() {
+        return Ok(());
+    }
+    let before = ctx
+        .pre_cdef
+        .take()
+        .ok_or(Error::InvalidData("AV1 restoration pre-CDEF image"))?;
+    let source_bytes = picture_bytes(&before).saturating_add(picture_bytes(&ctx.pic));
+    let y = restored_plane(ctx, &before, &ctx.pic, 0, budget)?;
+    let u = if ctx.seq_mono {
+        None
+    } else {
+        Some(restored_plane(ctx, &before, &ctx.pic, 1, budget)?)
+    };
+    let v = if ctx.seq_mono {
+        None
+    } else {
+        Some(restored_plane(ctx, &before, &ctx.pic, 2, budget)?)
+    };
+    ctx.pic = Picture { y, u, v };
+    budget.release(source_bytes);
+    Ok(())
 }
 
 fn apply_cdef(ctx: &mut FrameCtx, budget: &mut Budget) -> Result<()> {
@@ -832,6 +1022,8 @@ fn decode_one_tile(
         mi_row_end,
         mi_col_start,
         mi_col_end,
+        ref_sgr_xqd: [[-32, 31]; 3],
+        ref_lr_wiener: [[[3, -7, 15]; 2]; 3],
     };
     let _ = num_planes;
 
@@ -876,6 +1068,7 @@ fn decode_one_tile(
             } else {
                 12u8
             };
+            read_restoration_units(ctx, &mut ts, r, c, sb_size)?;
             decode_partition(ctx, &mut ts, r, c, sb_size)?;
             c += sb_size4;
         }
@@ -884,6 +1077,298 @@ fn decode_one_tile(
     ts.sd.exit_symbol();
     let _ = sb_size4_i;
     Ok(())
+}
+
+/// `read_lr()` / `read_lr_unit()`, AV1 §§5.11.57–5.11.58. The enclosing
+/// scope has already limited this to a single tile without superresolution.
+fn read_restoration_units(
+    ctx: &mut FrameCtx,
+    ts: &mut TileState<'_>,
+    r: usize,
+    c: usize,
+    b_size: u8,
+) -> Result<()> {
+    if !ctx.header.restoration.is_active() {
+        return Ok(());
+    }
+    let w4 = usize::from(
+        tables::NUM_4X4_BLOCKS_WIDE
+            .get(usize::from(b_size))
+            .copied()
+            .unwrap_or(0),
+    );
+    let h4 = usize::from(
+        tables::NUM_4X4_BLOCKS_HIGH
+            .get(usize::from(b_size))
+            .copied()
+            .unwrap_or(0),
+    );
+    if w4 == 0 || h4 == 0 {
+        return Err(Error::InvalidData("AV1 restoration superblock geometry"));
+    }
+    let num_planes = if ctx.seq_mono { 1 } else { 3 };
+    for plane in 0..num_planes {
+        let mode = ctx
+            .header
+            .restoration
+            .types
+            .get(plane)
+            .copied()
+            .unwrap_or(RestorationType::None);
+        if mode == RestorationType::None {
+            continue;
+        }
+        let config = restoration_plane_config(ctx, plane)?;
+        let (unit_cols, unit_rows) = config.unit_counts();
+        let chroma = plane != 0;
+        let sx = u32::from(chroma && ctx.subsampling_x);
+        let sy = u32::from(chroma && ctx.subsampling_y);
+        let sample_r = r.saturating_mul(4) >> sy;
+        let sample_c = c.saturating_mul(4) >> sx;
+        let sample_h = h4.saturating_mul(4) >> sy;
+        let sample_w = w4.saturating_mul(4) >> sx;
+        let unit_row_start = sample_r.div_ceil(config.unit_size).min(unit_rows);
+        let unit_row_end = sample_r
+            .saturating_add(sample_h)
+            .div_ceil(config.unit_size)
+            .min(unit_rows);
+        let unit_col_start = sample_c.div_ceil(config.unit_size).min(unit_cols);
+        let unit_col_end = sample_c
+            .saturating_add(sample_w)
+            .div_ceil(config.unit_size)
+            .min(unit_cols);
+        for unit_row in unit_row_start..unit_row_end {
+            for unit_col in unit_col_start..unit_col_end {
+                let unit = read_restoration_unit(ts, plane, mode)?;
+                let slot = unit_row
+                    .checked_mul(unit_cols)
+                    .and_then(|base| base.checked_add(unit_col))
+                    .ok_or(Error::InvalidData("AV1 restoration unit index"))?;
+                let map = ctx
+                    .restoration_units
+                    .get_mut(plane)
+                    .ok_or(Error::InvalidData("AV1 restoration plane unit map"))?;
+                let destination = map
+                    .get_mut(slot)
+                    .ok_or(Error::InvalidData("AV1 restoration unit map length"))?;
+                *destination = unit;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_restoration_unit(
+    ts: &mut TileState<'_>,
+    plane: usize,
+    mode: RestorationType,
+) -> Result<RestorationUnit> {
+    let selected = match mode {
+        RestorationType::None => RestorationType::None,
+        RestorationType::Wiener => {
+            let use_wiener = ts.sd.read_symbol(&mut ts.cdf.use_wiener) != 0;
+            if use_wiener {
+                RestorationType::Wiener
+            } else {
+                RestorationType::None
+            }
+        }
+        RestorationType::SelfGuided => {
+            let use_sgrproj = ts.sd.read_symbol(&mut ts.cdf.use_sgrproj) != 0;
+            if use_sgrproj {
+                RestorationType::SelfGuided
+            } else {
+                RestorationType::None
+            }
+        }
+        RestorationType::Switchable => match ts.sd.read_symbol(&mut ts.cdf.restoration_type) {
+            0 => RestorationType::None,
+            1 => RestorationType::Wiener,
+            2 => RestorationType::SelfGuided,
+            _ => return Err(Error::InvalidData("AV1 restoration type symbol")),
+        },
+    };
+    match selected {
+        RestorationType::None => Ok(RestorationUnit::None),
+        RestorationType::Wiener => read_wiener_unit(ts, plane),
+        RestorationType::SelfGuided => read_sgrproj_unit(ts, plane),
+        RestorationType::Switchable => Err(Error::InvalidData("AV1 restoration unit mode")),
+    }
+}
+
+fn read_wiener_unit(ts: &mut TileState<'_>, plane: usize) -> Result<RestorationUnit> {
+    let mut filters = [[0i16; 3]; 2];
+    for pass in 0..2 {
+        for coefficient in 0..3 {
+            let value = if plane != 0 && coefficient == 0 {
+                0
+            } else {
+                let (min, max, k) = match coefficient {
+                    0 => (-5i16, 10i16, 1u32),
+                    1 => (-23, 8, 2),
+                    2 => (-17, 46, 3),
+                    _ => return Err(Error::InvalidData("AV1 Wiener coefficient index")),
+                };
+                let reference = ts
+                    .ref_lr_wiener
+                    .get(plane)
+                    .and_then(|passes| passes.get(pass))
+                    .and_then(|coefficients| coefficients.get(coefficient))
+                    .copied()
+                    .ok_or(Error::InvalidData("AV1 Wiener reference state"))?;
+                read_signed_subexp_with_ref(&mut ts.sd, min, max, k, reference)?
+            };
+            let filter = filters
+                .get_mut(pass)
+                .and_then(|coefficients| coefficients.get_mut(coefficient))
+                .ok_or(Error::InvalidData("AV1 Wiener filter state"))?;
+            *filter = value;
+        }
+    }
+    let state = ts
+        .ref_lr_wiener
+        .get_mut(plane)
+        .ok_or(Error::InvalidData("AV1 Wiener reference plane"))?;
+    *state = filters;
+    let vertical = filters
+        .first()
+        .copied()
+        .ok_or(Error::InvalidData("AV1 Wiener vertical filter"))?;
+    let horizontal = filters
+        .get(1)
+        .copied()
+        .ok_or(Error::InvalidData("AV1 Wiener horizontal filter"))?;
+    Ok(RestorationUnit::Wiener {
+        vertical,
+        horizontal,
+    })
+}
+
+fn read_sgrproj_unit(ts: &mut TileState<'_>, plane: usize) -> Result<RestorationUnit> {
+    let set = u8::try_from(ts.sd.read_literal(4)).unwrap_or(0);
+    let mut xqd = [0i16; 2];
+    for pass in 0..2 {
+        let value = if restoration::sgr_uses_pass(set, pass) {
+            let (min, max) = if pass == 0 { (-96, 31) } else { (-32, 95) };
+            let reference = ts
+                .ref_sgr_xqd
+                .get(plane)
+                .and_then(|coefficients| coefficients.get(pass))
+                .copied()
+                .ok_or(Error::InvalidData("AV1 SGR reference state"))?;
+            read_signed_subexp_with_ref(&mut ts.sd, min, max, 3, reference)?
+        } else if pass == 0 {
+            0
+        } else {
+            let first = xqd.first().copied().unwrap_or(0);
+            (128 - first).clamp(-32, 95)
+        };
+        let coefficient = xqd
+            .get_mut(pass)
+            .ok_or(Error::InvalidData("AV1 SGR coefficient index"))?;
+        *coefficient = value;
+    }
+    let state = ts
+        .ref_sgr_xqd
+        .get_mut(plane)
+        .ok_or(Error::InvalidData("AV1 SGR reference plane"))?;
+    *state = xqd;
+    Ok(RestorationUnit::SelfGuided { set, xqd })
+}
+
+fn read_signed_subexp_with_ref(
+    sd: &mut SymbolDecoder<'_>,
+    low: i16,
+    high: i16,
+    k: u32,
+    reference: i16,
+) -> Result<i16> {
+    let symbols = i32::from(high) - i32::from(low) + 1;
+    let value = read_unsigned_subexp_with_ref(
+        sd,
+        u32::try_from(symbols).unwrap_or(0),
+        k,
+        i32::from(reference) - i32::from(low),
+    )?;
+    i16::try_from(value + i32::from(low)).map_err(|_| Error::InvalidData("AV1 signed subexp value"))
+}
+
+fn read_unsigned_subexp_with_ref(
+    sd: &mut SymbolDecoder<'_>,
+    symbols: u32,
+    k: u32,
+    reference: i32,
+) -> Result<i32> {
+    if symbols == 0 || reference < 0 || reference >= i32::try_from(symbols).unwrap_or(0) {
+        return Err(Error::InvalidData("AV1 subexp reference range"));
+    }
+    let value = i32::try_from(read_subexp(sd, symbols, k)?).unwrap_or(0);
+    let count = i32::try_from(symbols).unwrap_or(0);
+    let maximum = count - 1;
+    let recentered = if reference.saturating_mul(2) <= count {
+        inverse_recenter(reference, value)
+    } else {
+        maximum.saturating_sub(inverse_recenter(maximum.saturating_sub(reference), value))
+    };
+    Ok(recentered)
+}
+
+fn inverse_recenter(reference: i32, value: i32) -> i32 {
+    if value > reference.saturating_mul(2) {
+        value
+    } else if value & 1 != 0 {
+        reference.saturating_sub((value + 1) >> 1)
+    } else {
+        reference.saturating_add(value >> 1)
+    }
+}
+
+fn read_subexp(sd: &mut SymbolDecoder<'_>, symbols: u32, k: u32) -> Result<u32> {
+    if symbols == 0 || k >= 31 {
+        return Err(Error::InvalidData("AV1 subexp parameters"));
+    }
+    let mut i = 0u32;
+    let mut mk = 0u32;
+    loop {
+        let b2 = if i == 0 {
+            k
+        } else {
+            k.saturating_add(i).saturating_sub(1)
+        };
+        if b2 >= 31 {
+            return Err(Error::InvalidData("AV1 subexp bit width"));
+        }
+        let a = 1u32 << b2;
+        if symbols <= mk.saturating_add(a.saturating_mul(3)) {
+            return read_ns(sd, symbols.saturating_sub(mk)).map(|value| value.saturating_add(mk));
+        }
+        if sd.read_bool() == 0 {
+            let literal = sd.read_literal(b2);
+            return Ok(literal.saturating_add(mk));
+        }
+        i = i.saturating_add(1);
+        mk = mk.saturating_add(a);
+    }
+}
+
+fn read_ns(sd: &mut SymbolDecoder<'_>, symbols: u32) -> Result<u32> {
+    if symbols == 0 {
+        return Err(Error::InvalidData("AV1 non-power-of-two symbols"));
+    }
+    if symbols == 1 {
+        return Ok(0);
+    }
+    let width = 32 - (symbols - 1).leading_zeros();
+    let m = (1u32 << width).saturating_sub(symbols);
+    let value = sd.read_literal(width.saturating_sub(1));
+    if value < m {
+        Ok(value)
+    } else {
+        Ok(value
+            .saturating_mul(2)
+            .saturating_sub(m)
+            .saturating_add(sd.read_bool()))
+    }
 }
 
 #[allow(

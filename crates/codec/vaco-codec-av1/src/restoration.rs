@@ -1,7 +1,7 @@
 //! AV1 §7.17 scalar loop restoration, with separate pre-CDEF stripe borders.
 //!
-//! Unit coefficients are supplied by the caller; tile entropy syntax and pipeline
-//! wiring remain gated by [`FrameRestoration::check_scope`].
+//! The decoder supplies tile entropy syntax and preserves the separate source
+//! images required at restoration stripe boundaries.
 #![allow(
     clippy::integer_division,
     reason = "AV1 section 7.17 specifies truncating integer division"
@@ -36,17 +36,10 @@ pub struct FrameRestoration {
 }
 
 impl FrameRestoration {
-    /// Refuse streams whose tile restoration symbols are not yet decoded.
-    ///
-    /// # Errors
-    /// Returns `Unsupported` for any active restoration plane.
-    pub fn check_scope(self) -> Result<()> {
-        if self.types.iter().any(|mode| *mode != RestorationType::None) {
-            return Err(Error::Unsupported(
-                "AV1 loop restoration tile-unit syntax and pipeline",
-            ));
-        }
-        Ok(())
+    /// Whether any plane needs restoration-unit syntax and filtering.
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        self.types.iter().any(|mode| *mode != RestorationType::None)
     }
 }
 
@@ -308,6 +301,15 @@ const SGR_PARAMS: [[(i32, i64); 2]; 16] = [
     [(2, 30), (0, 0)],
     [(2, 75), (0, 0)],
 ];
+
+/// Whether a self-guided parameter set codes a projection coefficient for a pass.
+#[must_use]
+pub(crate) fn sgr_uses_pass(set: u8, pass: usize) -> bool {
+    SGR_PARAMS
+        .get(usize::from(set))
+        .and_then(|passes| passes.get(pass))
+        .is_some_and(|(radius, _)| *radius != 0)
+}
 
 fn box_ab(source: &Source<'_>, x: i32, y: i32, radius: i32, epsilon: i64) -> (i64, i64) {
     let n = i64::from((2 * radius + 1).pow(2));

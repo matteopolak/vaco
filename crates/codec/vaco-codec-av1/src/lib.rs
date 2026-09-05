@@ -7,15 +7,15 @@
 //! batch: OBU framing and sequence header (built on `vaco-parse-av1`, not
 //! reimplemented — see below), the frame header's full intra path (tile
 //! info, quantization, segmentation, delta-q/lf, the loop-filter/CDEF/
-//! restoration/film-grain *syntax* so later bytes stay aligned, tx mode),
+//! restoration syntax and its bounded scalar application, film-grain syntax
+//! so later bytes stay aligned, tx mode),
 //! the §8.2 symbol decoder and its CDF adaptation rule, the tile/superblock
 //! partition tree and mode-info walk, coefficient decoding, the inverse
 //! transforms, intra prediction including CFL, and CDEF filtering.
 //!
-//! Out of scope, left for later work: inter prediction, deblocking/
-//! loop restoration *application* (its header syntax is parsed so the bitstream
-//! stays aligned, but the filter does not run), film grain synthesis, frame
-//! threading/DPB, and
+//! Out of scope, left for later work: inter prediction, deblocking (active
+//! restoration refuses nonzero levels rather than filter reconstructed pixels),
+//! film grain synthesis, frame threading/DPB, and
 //! Argon conformance. An inter frame's header is rejected with
 //! [`vaco_core::Error::Unsupported`] rather than guessed at.
 //!
@@ -40,6 +40,7 @@
 //! | [`predict`] | §7.11.2 intra prediction and §7.11.5 CFL |
 //! | [`framebuf`] | The private reconstruction buffer intra prediction reads while writing (see `xtask/src/dup_check.rs`'s `DISTINCT` entries for why `vaco-codec-vp8`/`vaco-codec-vp9` have identically-named types) |
 //! | [`superres`] | §7.16 horizontal eight-tap super-resolution after CDEF |
+//! | [`restoration`] | §7.17 scalar restoration after CDEF, with active-stream scope checks |
 //! | [`decode`] | The tile/superblock/mode-info/residual walk and the [`vaco_codec_core::Decoder`] wiring |
 //!
 //! # Specification
