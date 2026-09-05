@@ -1679,7 +1679,15 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     if sps.scc_extension.is_some() {
         return unsupported("vaco-codec-hevc: screen-content-coding extensions are not supported");
     }
-    if pps.tiles.is_some() {
+    if let Some(tiles) = pps.tiles.as_ref() {
+        // Derive §6.5's raster CTB ownership before refusing the unimplemented
+        // CABAC/filtering path. This validates the real tile geometry without
+        // exposing any cross-tile samples to reconstruction.
+        let _layout = crate::tile::TileLayout::from_pps(
+            tiles,
+            sps.pic_width_in_ctbs(),
+            sps.pic_height_in_ctbs(),
+        )?;
         return unsupported("vaco-codec-hevc: tiles are not supported");
     }
     if pps.range_extension.is_some() {

@@ -17,12 +17,13 @@
 )]
 
 use vaco_codec_core::Decoder;
-use vaco_codec_hevc::HevcDecoder;
+use vaco_codec_hevc::{HevcDecoder, TileLayout};
 use vaco_core::Error;
 use vaco_format_nalu::Framing;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_parse_hevc::HevcParser;
+use vaco_parse_hevc::pps::Tiles;
 
 const HEVC: &[u8] = include_bytes!("fixtures/tiles_512x64.hevc");
 
@@ -56,4 +57,58 @@ fn tile_pps_is_rejected_by_name_before_cabac_decode() {
         error,
         Error::Unsupported("vaco-codec-hevc: tiles are not supported")
     ));
+}
+
+#[test]
+fn tile_pps_maps_raster_ctbs_and_blocks_cross_tile_neighbours() {
+    let limits = Limits::default();
+    let mut parser = HevcParser::new(limits);
+    parser
+        .push_access_unit(HEVC, Framing::AnnexB)
+        .expect("valid tile fixture parses");
+
+    let pps = parser
+        .parameter_sets()
+        .get_pps(0)
+        .expect("fixture references PPS zero");
+    let tiles = pps.tiles.as_ref().expect("fixture PPS enables tiles");
+    let sps = parser
+        .parameter_sets()
+        .get_sps(pps.sps_id)
+        .expect("fixture references SPS zero");
+    assert_eq!((sps.pic_width_in_ctbs(), sps.pic_height_in_ctbs()), (8, 1));
+    let layout = TileLayout::from_pps(tiles, sps.pic_width_in_ctbs(), sps.pic_height_in_ctbs())
+        .expect("fixture tile geometry is valid");
+
+    assert_eq!(layout.tile_at(0, 0), Some(0));
+    assert_eq!(layout.tile_at(3, 0), Some(0));
+    assert_eq!(layout.tile_at(4, 0), Some(1));
+    assert_eq!(layout.tile_at(7, 0), Some(1));
+    assert!(layout.left_available(1, 0));
+    assert!(!layout.left_available(4, 0));
+    assert!(layout.left_available(5, 0));
+    assert!(!layout.above_available(0, 0));
+}
+
+#[test]
+fn nonuniform_tile_widths_and_heights_leave_edges_unavailable() {
+    let tiles = Tiles {
+        num_columns: 3,
+        num_rows: 2,
+        uniform_spacing: false,
+        column_widths: vec![1, 2],
+        row_heights: vec![1],
+        loop_filter_across_tiles: false,
+    };
+    let layout = TileLayout::from_pps(&tiles, 6, 3).expect("positive partition is valid");
+
+    assert_eq!(layout.tile_at(0, 0), Some(0));
+    assert_eq!(layout.tile_at(1, 0), Some(1));
+    assert_eq!(layout.tile_at(3, 0), Some(2));
+    assert_eq!(layout.tile_at(0, 1), Some(3));
+    assert!(!layout.left_available(1, 0));
+    assert!(layout.left_available(2, 0));
+    assert!(!layout.above_available(0, 1));
+    assert!(!layout.above_available(1, 1));
+    assert!(layout.above_available(1, 2));
 }

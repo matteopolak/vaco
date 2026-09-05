@@ -220,11 +220,13 @@ mod motion;
 mod residual;
 mod sao;
 mod scan;
+mod tile;
 mod transform;
 mod wavefront;
 mod weight;
 
 pub use decoder::HevcDecoder;
+pub use tile::TileLayout;
 
 /// The registry descriptor for this crate's decoder.
 ///

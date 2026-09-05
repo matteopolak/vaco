@@ -956,18 +956,26 @@ unproven non-row-aligned boundaries remain named refusals.
 
 ## Tile pictures — named refusal verified by a real two-column stream
 
-Tiles remain out of scope because the CTU walk and its neighbour-availability
-state are still addressed as one raster picture; treating a tile boundary as a
-slice boundary would emit wrong intra references and loop-filter decisions.
-The refusal is now covered by `tests/tiles.rs` with a real HM 18.0 Main-profile
+Tiles remain out of scope for reconstruction and filtering because the CTU walk
+must apply §6.5's tile-local neighbour-availability state; treating a tile
+boundary as a slice boundary would emit wrong intra references and loop-filter
+decisions. The decoder now derives that prerequisite geometry in
+`TileLayout::from_pps`: uniform spacing uses the specified floor boundary
+formula, explicit PPS widths/heights consume all but the final extent, and
+left/above neighbours at a tile edge are unavailable. This derivation is
+validated before the unchanged named refusal, so no unproven cross-tile sample
+can reach CABAC, reconstruction, deblocking, or SAO. The refusal is covered by
+`tests/tiles.rs` with a real HM 18.0 Main-profile
 Annex-B fixture: one 512x64 IDR picture, two uniform tile columns, WPP off,
 SAO and deblocking off. The test first parses the PPS and asserts
 `tiles_enabled_flag`, `num_tile_columns_minus1 + 1 == 2`, and one tile row,
-then sends the same access unit to `HevcDecoder` and requires exactly
+then checks the 8-CTB raster map (`0..3 -> tile 0`, `4..7 -> tile 1`) and the
+cross-column neighbour boundary. Finally it sends the same access unit to
+`HevcDecoder` and requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before any
-CABAC data is decoded. This keeps the parser's §7.3.2.3 tile syntax exercised
-without allowing a decoder path that has not implemented §6.5 tile-neighbour
-availability.
+CABAC data is decoded. This keeps the parser's §7.3.2.3 tile syntax and the
+decoder's §6.5 geometry exercised without allowing a decoder path that has not
+implemented cross-tile filtering.
 
 The checked-in stream is 1,813 bytes with SHA-256
 `e7ede7ded9e07974097809c4bacda3492a6634a216a8d8b5c8920a3ceb3c91f2`.
