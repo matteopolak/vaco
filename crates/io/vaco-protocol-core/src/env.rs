@@ -1,57 +1,33 @@
 //! The whitelist gate — the security boundary of the I/O layer.
 //!
-//! # Why this exists
-//!
-//! A playlist is input. `hls`, `dash`, `concat`, `sdp` and `tee` all open URLs
-//! that came out of a file somebody else wrote, and the file gets to choose the
-//! scheme. Without a gate, a `.m3u8` served over HTTP can name
-//! `file:///etc/passwd` or `http://169.254.169.254/latest/meta-data/` and the
-//! demuxer will dutifully fetch it. That is server-side request forgery and
-//! arbitrary file read, delivered by a media player.
-//!
-//! So: **a nested open is not an implementation detail, it is a privilege
-//! check**, and [`ProtocolEnv`] is the capability that carries the privilege.
-//! It is threaded down through every level and never reconstructed, because a
-//! reconstructed environment is a reset privilege check.
+//! A playlist controls the URLs it names. Without a gate, an HTTP-served
+//! playlist could request `file:///etc/passwd` or cloud metadata, turning a
+//! media player into an SSRF and arbitrary-file reader. [`ProtocolEnv`] carries
+//! this privilege through every nested open and is never reconstructed.
 //!
 //! # The gate
 //!
 //! ```text
-//! allowed(scheme) =
-//!       scheme ∉ blacklist                                   (W1)
-//!   AND (effective is None OR scheme ∈ effective)            (W2)
-//!   AND depth < recursion_limit                              (W4)
-//!
-//!   effective = whitelist               if the caller gave one   (W3)
-//!             = parent.default_whitelist if non-empty
-//!             = None
+//! allowed(scheme) = scheme ∉ blacklist
+//!                AND (effective is None OR scheme ∈ effective)
+//!                AND depth < recursion_limit
+//! effective = whitelist if explicitly supplied
+//!          = parent.default_whitelist if non-empty
+//!          = None otherwise
 //! ```
 //!
-//! * **W1** — the blacklist always wins, even over an explicit whitelist entry.
-//! * **W2** — a demuxer that opens nested URLs must route through here.
-//! * **W3** — an explicit whitelist **replaces** the parent's default grant; it
-//!   does not add to it. This used to be a union, which made us strictly more
-//!   permissive than the reference: a caller who narrowed the whitelist got
-//!   less narrowing than they asked for, in the one mechanism whose entire job
-//!   is to stop a playlist from opening `file:///etc/passwd`.
+//! * **W1** — the blacklist wins, even over an explicit whitelist entry.
+//! * **W2** — nested-opening demuxers must route through this gate.
+//! * **W3** — an explicit whitelist replaces, rather than widens, the parent's
+//!   default grant. Measured: `-protocol_whitelist tls` refuses nested `tcp:`
+//!   with `Protocol 'tcp' not on whitelist 'tls'!`, despite `tls` granting it.
+//! * **W4** — depth increments on every nested open, so
+//!   `cache:async:https://…` is depth 3.
 //!
-//!   Measured: `-protocol_whitelist tls` alone is refused the nested `tcp:`
-//!   open with `Protocol 'tcp' not on whitelist 'tls'!`, even though `tls`
-//!   grants `tcp` by default. Found while building `vaco-protocol-tls` and
-//!   reported rather than worked around, because this crate was not that
-//!   agent's to change.
-//!
-//!   **The other half is deliberately not implemented.** Whether a *non-empty*
-//!   `default_whitelist` should also *restrict* when the caller gives no
-//!   explicit list is not something we have measured — the obvious experiment
-//!   (an HLS playlist naming a `data:` segment) is refused by a different gate,
-//!   `allowed_segment_extensions`, before the whitelist is consulted. Guessing
-//!   it would make us *more* restrictive than the reference and break files
-//!   that work today, which is the opposite failure and no more acceptable. So
-//!   `None` still means unrestricted, and this note is here so the next person
-//!   knows it is an open question rather than a settled one.
-//! * **W4** — depth increments on every nested open including
-//!   protocol-over-protocol, so `cache:async:https://…` is depth 3.
+//! Whether a non-empty default whitelist should restrict an unrestricted caller
+//! remains unmeasured: the obvious probe is rejected by a different gate first.
+//! Keep `None` unrestricted until that behavior is established against the
+//! reference; guessing would silently break files that work today.
 
 use std::path::Path;
 use std::time::Duration;
