@@ -134,6 +134,9 @@ fn weight(strength: f32, diff: f32) -> f32 {
     if strength <= 0.0 {
         return 0.0;
     }
+    if diff == 0.0 {
+        return 1.0;
+    }
     strength / (strength + diff * diff)
 }
 

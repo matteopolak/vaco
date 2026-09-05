@@ -76,6 +76,15 @@ second transcription of the same formula:
   genuine zero strength disables that pass) — recovering the reference's
   exact substituted constants would need either its source or a much larger
   bisection. See `hqdn3d.rs`'s module doc for the full `framecrc` evidence.
+
+  **Performance note (2026-09-05):** `weight` returns the mathematically
+  exact weight `1` for zero-difference neighbours before dividing. Ten rotated
+  300-frame rounds on a 640x360 `testsrc2` YUV420p Y4M workload measured
+  0.8767 s wall / 0.7500 s CPU before and 0.8206 s / 0.7730 s after; the
+  same-session ffmpeg ratios were 3.91x -> 3.66x wall and 2.35x -> 2.42x
+  CPU. Named xctrace CPU Counters `Cycles` were 6,398,413 before and 6,082,214
+  then 5,525,217 after (0.951x and 0.864x). Output bytes were unchanged, and
+  hashes matched across `-threads 1`, `2`, `4`, and `8`.
 * **`atadenoise`**: uses a **trailing** window (frame `N`'s output averages
   the last `min(s, N+1)` input frames including itself) rather than the
   reference's **centred** window, trading frame-alignment fidelity for zero
