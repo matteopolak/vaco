@@ -1,84 +1,35 @@
 //! The command-line machinery shared by `vaco`, `vaco-probe` and `vaco-play`.
 //!
-//! This crate turns an argument vector into a validated, scoped option
-//! structure. It does not run a pipeline, open a file or touch a codec — its
-//! whole job is to decide, exactly as the reference does, **what a command line
-//! means**.
+//! This crate turns an argument vector into validated, scoped options. It does
+//! not run a pipeline, open a file, or touch a codec: its job is to decide what
+//! a command line means, matching the reference's stateful option groups.
 //!
 //! # Why this is not `clap`
 //!
-//! `clap` models a flag set. The reference's command line is a *positional,
-//! stateful stream of option groups over an option universe that is not known
-//! until components are chosen*. Concretely:
+//! The option universe depends on the selected components, and option names
+//! carry stream-specifier sublanguages. Values also use two grammars: `-ac 1*2`
+//! is invalid while `-crf 1*2` evaluates to 2. See [`value`].
 //!
-//! * `-b:v 1M` before `-i` and after `-i` are different options on different
-//!   objects.
-//! * `-c:v:0`, `-map 0:a:1?`, `-metadata:s:v title=x` embed a sub-language in
-//!   the *name* token.
-//! * `-crf 20` is valid only because some encoder declares `crf`; the parser
-//!   must accept unknown names and audit them later.
-//! * `-ac 1*2` is an error and `-crf 1*2` is 2 — the CLI has **two** numeric
-//!   value grammars, and which one an option uses is not a property of its
-//!   type. See [`value`].
-//! * `-nostats` negates a boolean; `-noqwerty` is an error.
-//! * `-/filter:v graph.txt` reads the value out of a file.
-//!
-//! Every one of those is survivable in isolation. Together they are a different
-//! machine, and it is written out here rather than bent around a general parser.
-//!
-//! # The pipeline
+//! # Pipeline
 //!
 //! ```text
-//! argv ──▶ [lex]      one entry at a time: option, positional, or `--`
-//!      ──▶ [split]    global set + ordered per-file groups        (this crate)
-//!      ──▶ [validate] every per-file option on the right side     (this crate)
-//!      ──▶ [resolve]  per-stream values against a file's streams  (this crate)
-//!      ──▶ [apply]    component options through `vaco-opts`       (the binary)
+//! argv ──▶ lex ──▶ split ──▶ validate ──▶ resolve ──▶ apply through `vaco-opts`
 //! ```
 //!
-//! # Where to start reading
-//!
-//! * [`table`] — the **scope model**. Read this first.
-//! * [`spec`] — the stream specifier grammar, which is stranger than the manual
-//!   suggests.
-//! * [`split`] — the grouping pass.
-//! * [`value`] — the two numeric grammars, and the option dialect of the
-//!   expression language.
+//! [`table`] defines scope, [`spec`] parses stream specifiers, [`split`] groups
+//! per-file options, and [`value`] owns the numeric grammars.
 //!
 //! # Provenance
 //!
-//! Written clean-room (D7/D15). The command-line grammar is an *interface*, so
-//! it was derived by black-box probing of ffmpeg 8.1 and from published
-//! documentation, never from source. Every acceptance and rejection asserted in
-//! this crate's tests was observed from the shipped binary; the method is
-//! recorded in `docs/app/vaco-cli-core.md`.
+//! The interface was derived clean-room from published documentation and
+//! black-box probes of ffmpeg 8.1 (D7/D15), never source; the method is recorded
+//! in `docs/app/vaco-cli-core.md`. Option names are reproduced as interface
+//! facts, while help text is Vaco-authored, so `-h` is not byte-identical (D9).
 //!
-//! Per D9, option **names** are interface facts and are reproduced; help **text**
-//! is not, and every help string here was written for Vaco. `-h` output
-//! consequently cannot be byte-identical, which is an accepted project-level
-//! consequence, not an oversight.
-//!
-//! # D17 deviations reproduced deliberately
-//!
-//! Each is annotated at its site with a `// D17:` comment. The list, so a
-//! reviewer can find them:
-//!
-//! | Where | The reference does | We do the same because |
-//! |---|---|---|
-//! | [`table::OptDesc::spec_kind`] | accepts `-y:vv`, `-t:zzz` — a specifier on an option that has none, never validated | rejecting them would break working command lines |
-//! | [`metaspec`] | `-metadata:gg` and `-metadata:g:0` mean "global"; the tail is never read | same |
-//! | [`metaspec`] | `-metadata:c:x` is chapter 0, not an error | same |
-//! | [`map`] | `-map [v` needs no closing bracket | same |
-//! | [`error::SpecError::MultipleProgramOrGroup`] | prints without a trailing newline, so the next log line runs into it | stderr is compared byte for byte (D6) |
-//! | [`spec`] | prints `Parsed 'usable only'` at error level on success | see the note below |
-//! | [`value`] | accepts `-ac ""` as zero while rejecting `-ac " "` | C sets `endptr = nptr`, so only the first has an empty tail |
-//! | [`value`] | prints an `int64` bound as `9223372036854775808`, one too high | the bound goes through a `double` before `%f` |
-//! | [`value`] | `-crf max(1,2)` is a parse error | `max` is a *constant* on the option path and shadows the builtin |
-//!
-//! That last one is a message the reference emits *on the success path* at
-//! `AV_LOG_ERROR` whenever a specifier contains `u`. It is left to the binary
-//! to reproduce, since this crate does not log; [`spec::StreamSpecifier::usable`]
-//! is the trigger.
+//! D17 deviations are retained deliberately, each marked at its implementation
+//! site with `// D17:` and summarized in `docs/app/vaco-cli-core.md`. They cover
+//! permissive specifiers, exact diagnostic text, and the two numeric parsers;
+//! changing one requires a fresh reference measurement.
 
 #![forbid(unsafe_code)]
 
