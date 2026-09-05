@@ -16,11 +16,12 @@
 //! are supported; nested transforms and line-level tags inside a transform are
 //! ignored so evaluation remains non-recursive and cannot change placement.
 //!
-//! # Recognised but not animated (stage (b), GitHub #488 / FT-5.3)
+//! # Bounded point-in-time animation and remaining gaps (stage (b), GitHub #488 / FT-5.3)
 //!
-//! `\move(x1,y1,x2,y2[,t1,t2])` uses `(x1, y1)` as a static `\pos`,
-//! ignoring the motion. `\fad`/`\fade` are parsed and ignored — the event
-//! renders at full opacity for its whole span rather than fading. `\k`/
+//! `\move(x1,y1,x2,y2[,t1,t2])` interpolates the position at the requested
+//! event-relative time, clamping before and after the motion interval.
+//! `\fad`/`\fade` resolve the four rendered colour alphas at that same time.
+//! `\k`/
 //! `\kf`/`\ko`/`\K` retain centisecond syllable intervals and `\p<n>`
 //! retains drawing-command text, its scale, and `\pbo` baseline offset.
 //! `\fax`/`\fay` (shear) are parsed and
@@ -28,7 +29,8 @@
 //! each run, and `\org` carries their optional line origin for the
 //! downstream subtitle renderer.
 //!
-//! Every one of these is a real, named gap — not a silent guess.
+//! The remaining shear and vector-clip gaps are real, named limitations — not
+//! silent guesses.
 
 use vaco_core::{Duration, Rgba};
 
@@ -174,6 +176,24 @@ struct Cursor<'a> {
     karaoke: Option<KaraokeTiming>,
     karaoke_clock_ms: f64,
     drawing_baseline_offset: f64,
+    fade: Option<FadeSpec>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FadeSpec {
+    Simple {
+        in_ms: f64,
+        out_ms: f64,
+    },
+    Complex {
+        a1: f64,
+        a2: f64,
+        a3: f64,
+        t1: f64,
+        t2: f64,
+        t3: f64,
+        t4: f64,
+    },
 }
 
 /// Interpret `event` at its start time against `script`'s styles.
@@ -209,6 +229,7 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
         karaoke: None,
         karaoke_clock_ms: 0.0,
         drawing_baseline_offset: 0.0,
+        fade: None,
         base,
     };
     let mut runs = Vec::new();
@@ -229,8 +250,15 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
             }
             Item::Tag { name, arg } => {
                 if !buf.is_empty() {
+                    let mut style = cursor.cur.clone();
+                    apply_fade(
+                        &mut style,
+                        cursor.fade,
+                        cursor.elapsed_ms,
+                        cursor.duration_ms,
+                    );
                     runs.push(TextRun {
-                        style: cursor.cur.clone(),
+                        style,
                         text: std::mem::take(&mut buf),
                         karaoke: cursor.karaoke,
                     });
@@ -257,18 +285,28 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
                 }
                 apply_tag(&mut cursor, &name, arg.as_deref(), &mut drawing_depth);
                 if !was_drawing && drawing_depth != 0 {
-                    drawing_style = Some((
-                        cursor.cur.clone(),
-                        drawing_depth,
-                        cursor.drawing_baseline_offset,
-                    ));
+                    let mut style = cursor.cur.clone();
+                    apply_fade(
+                        &mut style,
+                        cursor.fade,
+                        cursor.elapsed_ms,
+                        cursor.duration_ms,
+                    );
+                    drawing_style = Some((style, drawing_depth, cursor.drawing_baseline_offset));
                 }
             }
         }
     }
     if !buf.is_empty() {
+        let mut style = cursor.cur.clone();
+        apply_fade(
+            &mut style,
+            cursor.fade,
+            cursor.elapsed_ms,
+            cursor.duration_ms,
+        );
         runs.push(TextRun {
-            style: cursor.cur.clone(),
+            style,
             text: buf,
             karaoke: cursor.karaoke,
         });
@@ -316,6 +354,10 @@ fn parse_num(s: &str) -> Option<f64> {
         .trim_end_matches('&')
         .parse()
         .ok()
+}
+
+fn parse_finite_num(s: &str) -> Option<f64> {
+    parse_num(s).filter(|value| value.is_finite())
 }
 
 fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_depth: &mut u32) {
@@ -410,9 +452,21 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
             }
         }
         "move" => {
-            let nums: Vec<f64> = a.split(',').filter_map(parse_num).collect();
-            if let (Some(&x), Some(&y)) = (nums.first(), nums.get(1)) {
-                cursor.pos = Some((x, y));
+            let nums: Vec<f64> = a.split(',').filter_map(parse_finite_num).collect();
+            if let [x1, y1, x2, y2] | [x1, y1, x2, y2, _, _] = nums.as_slice() {
+                let (t1, t2) = match nums.as_slice() {
+                    [_, _, _, _, t1, t2] => (*t1, *t2),
+                    _ => (0.0, cursor.duration_ms),
+                };
+                let progress = if t2 <= t1 {
+                    if cursor.elapsed_ms >= t2 { 1.0 } else { 0.0 }
+                } else {
+                    ((cursor.elapsed_ms - t1) / (t2 - t1)).clamp(0.0, 1.0)
+                };
+                cursor.pos = Some((
+                    interpolate_number(*x1, *x2, progress),
+                    interpolate_number(*y1, *y2, progress),
+                ));
             }
         }
         "org" => {
@@ -451,11 +505,39 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
             });
             cursor.karaoke_clock_ms += duration_ms;
         }
+        "fad" => {
+            let nums: Vec<f64> = a.split(',').filter_map(parse_finite_num).collect();
+            if let [in_ms, out_ms] = nums.as_slice()
+                && *in_ms >= 0.0
+                && *out_ms >= 0.0
+            {
+                cursor.fade = Some(FadeSpec::Simple {
+                    in_ms: *in_ms,
+                    out_ms: *out_ms,
+                });
+            }
+        }
+        "fade" => {
+            let nums: Vec<f64> = a.split(',').filter_map(parse_finite_num).collect();
+            if let [a1, a2, a3, t1, t2, t3, t4] = nums.as_slice()
+                && [*t1, *t2, *t3, *t4].iter().all(|value| *value >= 0.0)
+            {
+                cursor.fade = Some(FadeSpec::Complex {
+                    a1: a1.clamp(0.0, 255.0),
+                    a2: a2.clamp(0.0, 255.0),
+                    a3: a3.clamp(0.0, 255.0),
+                    t1: *t1,
+                    t2: *t2,
+                    t3: *t3,
+                    t4: *t4,
+                });
+            }
+        }
         "t" => {
             apply_transform(cursor, a);
         }
-        // `\fad`/`\fade` (parsed, not applied) and `\k`/`\kf`/`\ko` (karaoke
-        // timing, not applied) fall through to the wildcard arm below.
+        // `\k`/`\kf`/`\ko` (karaoke timing, not applied here) is retained on
+        // each text run for the subtitle renderer.
         "r" => {
             let target = if a.is_empty() {
                 cursor.base.clone()
@@ -465,6 +547,63 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
             cursor.cur = ResolvedStyle::from_style(&target);
         }
         _ => {}
+    }
+}
+
+fn apply_fade(
+    style: &mut ResolvedStyle,
+    fade: Option<FadeSpec>,
+    elapsed_ms: f64,
+    duration_ms: f64,
+) {
+    let Some(fade) = fade else {
+        return;
+    };
+    let opacity = match fade {
+        FadeSpec::Simple { in_ms, out_ms } => {
+            let in_progress = if in_ms <= 0.0 {
+                1.0
+            } else {
+                (elapsed_ms / in_ms).clamp(0.0, 1.0)
+            };
+            let out_start = (duration_ms - out_ms).max(0.0);
+            let out_progress = if out_ms <= 0.0 || elapsed_ms <= out_start {
+                1.0
+            } else {
+                ((duration_ms - elapsed_ms) / out_ms).clamp(0.0, 1.0)
+            };
+            in_progress.min(out_progress)
+        }
+        FadeSpec::Complex {
+            a1,
+            a2,
+            a3,
+            t1,
+            t2,
+            t3,
+            t4,
+        } => {
+            let alpha = if elapsed_ms < t1 {
+                a1
+            } else if t2 > t1 && elapsed_ms < t2 {
+                interpolate_number(a1, a2, (elapsed_ms - t1) / (t2 - t1))
+            } else if elapsed_ms < t3 {
+                a2
+            } else if t4 > t3 && elapsed_ms < t4 {
+                interpolate_number(a2, a3, (elapsed_ms - t3) / (t4 - t3))
+            } else {
+                a3
+            };
+            (1.0 - alpha / 255.0).clamp(0.0, 1.0)
+        }
+    };
+    for colour in [
+        &mut style.primary,
+        &mut style.secondary,
+        &mut style.outline_colour,
+        &mut style.back_colour,
+    ] {
+        colour.a = (f64::from(colour.a) * opacity).round().clamp(0.0, 255.0) as u8;
     }
 }
 
@@ -786,10 +925,57 @@ mod tests {
     }
 
     #[test]
-    fn move_uses_its_start_point_as_a_static_position() {
+    fn move_interpolates_between_endpoints_at_event_time() {
         let (script, event) = one_event(r"{\move(10,20,300,400)}x");
-        let plan = plan_event(&script, &event);
-        assert_eq!(plan.pos, Some((10.0, 20.0)));
+        let start = plan_event_at(&script, &event, Duration::from_micros(0));
+        let middle = plan_event_at(&script, &event, Duration::from_micros(2_500_000));
+        let end = plan_event_at(&script, &event, Duration::from_micros(5_000_000));
+        assert_eq!(start.pos, Some((10.0, 20.0)));
+        assert_eq!(middle.pos, Some((155.0, 210.0)));
+        assert_eq!(end.pos, Some((300.0, 400.0)));
+    }
+
+    #[test]
+    fn move_honours_optional_relative_times_and_clamps() {
+        let (script, event) = one_event(r"{\move(10,20,300,400,1000,3000)}x");
+        let before = plan_event_at(&script, &event, Duration::from_micros(500_000));
+        let middle = plan_event_at(&script, &event, Duration::from_micros(2_000_000));
+        let after = plan_event_at(&script, &event, Duration::from_micros(4_000_000));
+        assert_eq!(before.pos, Some((10.0, 20.0)));
+        assert_eq!(middle.pos, Some((155.0, 210.0)));
+        assert_eq!(after.pos, Some((300.0, 400.0)));
+    }
+
+    #[test]
+    fn fad_changes_all_rendered_colour_alpha_channels_over_time() {
+        let (script, event) = one_event(r"{\fad(1000,2000)}x");
+        let before = plan_event_at(&script, &event, Duration::from_micros(0));
+        let middle = plan_event_at(&script, &event, Duration::from_micros(1_000_000));
+        let hold = plan_event_at(&script, &event, Duration::from_micros(2_500_000));
+        let out = plan_event_at(&script, &event, Duration::from_micros(4_000_000));
+        let after = plan_event_at(&script, &event, Duration::from_micros(5_000_000));
+        assert_eq!(before.runs[0].style.primary.a, 0);
+        assert_eq!(middle.runs[0].style.primary.a, 255);
+        assert_eq!(hold.runs[0].style.primary.a, 255);
+        assert_eq!(out.runs[0].style.primary.a, 128);
+        assert_eq!(after.runs[0].style.primary.a, 0);
+        assert_eq!(hold.runs[0].style.outline_colour.a, 255);
+        assert_eq!(hold.runs[0].style.back_colour.a, 255);
+    }
+
+    #[test]
+    fn fade_uses_two_interpolated_alpha_segments() {
+        let (script, event) = one_event(r"{\fade(255,0,128,500,1500,3000,4000)}x");
+        let start = plan_event_at(&script, &event, Duration::from_micros(0));
+        let first = plan_event_at(&script, &event, Duration::from_micros(1_000_000));
+        let hold = plan_event_at(&script, &event, Duration::from_micros(2_000_000));
+        let second = plan_event_at(&script, &event, Duration::from_micros(3_500_000));
+        let end = plan_event_at(&script, &event, Duration::from_micros(5_000_000));
+        assert_eq!(start.runs[0].style.primary.a, 0);
+        assert_eq!(first.runs[0].style.primary.a, 128);
+        assert_eq!(hold.runs[0].style.primary.a, 255);
+        assert_eq!(second.runs[0].style.primary.a, 191);
+        assert_eq!(end.runs[0].style.primary.a, 127);
     }
 
     #[test]

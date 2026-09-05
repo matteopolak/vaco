@@ -46,9 +46,10 @@ leaves the current style unchanged. Nested `\t` and line-level tags inside
 a transform are ignored deliberately, keeping evaluation non-recursive and
 placement unchanged.
 
-A second group is recognised but not animated: `\move` uses
-its start point as a static `\pos`; `\fad`/`\fade` are parsed and
-ignored (full opacity for the whole event); `\fax`/`\fay` shear is parsed
+A second group is now resolved at the requested event time: `\move` linearly
+interpolates between its endpoints (with optional event-relative `t1,t2` and
+clamping outside that interval), while `\fad` and the two-segment `\fade`
+forms adjust all four rendered colour alphas. `\fax`/`\fay` shear is parsed
 and ignored. `\frx`/`\fry`/
 `\frz`/`\fr` carry static X/Y/Z angles on each run and `\org` carries the
 optional line rotation origin; `vaco-filter-subtitle` projects them when
@@ -58,16 +59,19 @@ not this file.
 
 ## How to change it
 
-- A new static tag: add a case in `plan::plan_event` and extend
+- A new static tag: add a case in `plan::plan_event_at` and extend
   [`plan::ResolvedStyle`]/[`plan::TextRun`] if it needs a new field on
   the plan.
+- Movement and fades belong in `plan_event_at`, where the event-relative
+  timestamp and duration are available. Keep their state bounded to one
+  motion/fade value; do not retain a per-frame animation list.
 - Rotation geometry belongs in `vaco-filter-subtitle`; this crate keeps
   `\frx`/`\fry`/`\frz` and `\org` in script coordinates so the renderer
   can scale the pivot and camera distance exactly once.
 - Add a `\t`-animatable run-style field in `plan.rs`'s bounded
-  `apply_transform_style_tag` and `interpolate_style` pair. Placement,
-  animated clipping, motion, and fades need their own point-in-time line
-  state; do not make nested transforms recursive.
+  `apply_transform_style_tag` and `interpolate_style` pair. Placement and
+  animated clipping need their own point-in-time line state; do not make
+  nested transforms recursive.
 - A new override tag the tokenizer has never seen: `tags::tokenize`
   already passes any `name`/`arg` pair through uninterpreted, so only
   `plan.rs` needs a new match arm.
