@@ -7,7 +7,7 @@
 
 use vaco_bitstream::BitWriter;
 use vaco_chlayout::ChannelLayout;
-use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
+use vaco_codec_core::{Accept, Caps, Encoder, Machine, SendReceive};
 use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
@@ -100,10 +100,17 @@ impl AacLcSilenceAccessUnit {
 }
 
 /// AAC-LC ADTS encoding for exactly one mono or stereo silent long-window frame at a time.
+///
+/// As a generic [`Encoder`], call [`Encoder::prime_audio`] before the first
+/// frame to expose the matching `AudioSpecificConfig` through
+/// [`Encoder::extradata`] for a container. A later frame with a different
+/// supported stream configuration is refused.
 #[derive(Debug)]
 pub struct AacLcSilenceEncoder {
     machine: Machine<Packet>,
     limits: Limits,
+    primed_audio_specific_config: Option<[u8; 2]>,
+    has_emitted_packet: bool,
 }
 
 impl AacLcSilenceEncoder {
@@ -113,6 +120,8 @@ impl AacLcSilenceEncoder {
         Self {
             machine: Machine::new(Caps::empty()),
             limits,
+            primed_audio_specific_config: None,
+            has_emitted_packet: false,
         }
     }
 }
@@ -178,10 +187,27 @@ fn silence_frame_configuration(frame: &Frame) -> Result<(u32, u32, u32, usize, [
             "vaco-codec-aac: only mono or stereo S16 silence can be encoded",
         ));
     };
-    let (sampling_frequency_index, audio_specific_config) = match (
+    let (sampling_frequency_index, audio_specific_config) =
+        silence_stream_configuration(*sample_rate, channel_configuration)?;
+    if *format != SampleFmt::S16 || *samples != SAMPLES_PER_FRAME || planes.len() != 1 {
+        return Err(Error::Unsupported(
+            "vaco-codec-aac: only packed S16 mono or stereo 22.05/24/32/44.1/48 kHz frames of exactly 1024 samples are supported",
+        ));
+    }
+    Ok((
         *sample_rate,
+        sampling_frequency_index,
         channel_configuration,
-    ) {
+        expected_plane_bytes,
+        audio_specific_config,
+    ))
+}
+
+fn silence_stream_configuration(
+    sample_rate: u32,
+    channel_configuration: u32,
+) -> Result<(u32, [u8; 2])> {
+    let configuration = match (sample_rate, channel_configuration) {
         (SAMPLE_RATE_48_KHZ, 1) => (3, MONO_48_KHZ_AUDIO_SPECIFIC_CONFIG),
         (SAMPLE_RATE_48_KHZ, 2) => (3, STEREO_48_KHZ_AUDIO_SPECIFIC_CONFIG),
         (SAMPLE_RATE_44_1_KHZ, 1) => (4, MONO_44_1_KHZ_AUDIO_SPECIFIC_CONFIG),
@@ -198,18 +224,7 @@ fn silence_frame_configuration(frame: &Frame) -> Result<(u32, u32, u32, usize, [
             ));
         }
     };
-    if *format != SampleFmt::S16 || *samples != SAMPLES_PER_FRAME || planes.len() != 1 {
-        return Err(Error::Unsupported(
-            "vaco-codec-aac: only packed S16 mono or stereo 22.05/24/32/44.1/48 kHz frames of exactly 1024 samples are supported",
-        ));
-    }
-    Ok((
-        *sample_rate,
-        sampling_frequency_index,
-        channel_configuration,
-        expected_plane_bytes,
-        audio_specific_config,
-    ))
+    Ok(configuration)
 }
 
 fn silent_adts_access_unit(
@@ -265,6 +280,14 @@ impl SendReceive for AacLcSilenceEncoder {
                     return Ok(());
                 };
                 let raw = AacLcSilenceAccessUnit::from_frame(frame)?;
+                if self
+                    .primed_audio_specific_config
+                    .is_some_and(|primed| primed != raw.audio_specific_config)
+                {
+                    return Err(Error::Unsupported(
+                        "vaco-codec-aac: input does not match the primed stream configuration",
+                    ));
+                }
                 let access_unit = silent_adts_access_unit(
                     raw.payload(),
                     raw.sampling_frequency_index,
@@ -282,6 +305,7 @@ impl SendReceive for AacLcSilenceEncoder {
                     ))
                     .unwrap_or(Duration::ZERO);
                 packet.set_duration_ts(i64::from(SAMPLES_PER_FRAME));
+                self.has_emitted_packet = true;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -301,6 +325,49 @@ impl SendReceive for AacLcSilenceEncoder {
     }
 }
 
+impl Encoder for AacLcSilenceEncoder {
+    fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
+        self.send(frame)
+    }
+
+    fn receive_packet(&mut self) -> Result<Packet> {
+        self.receive()
+    }
+
+    fn flush(&mut self) {
+        SendReceive::flush(self);
+    }
+
+    fn accepted_sample_fmts(&self) -> &'static [SampleFmt] {
+        SendReceive::accepted_sample_fmts(self)
+    }
+
+    fn prime_audio(&mut self, sample_rate: u32, layout: ChannelLayout, format: SampleFmt) {
+        if self.has_emitted_packet
+            || self.primed_audio_specific_config.is_some()
+            || format != SampleFmt::S16
+        {
+            return;
+        }
+        let channel_configuration = if layout == ChannelLayout::MONO {
+            1
+        } else if layout == ChannelLayout::STEREO {
+            2
+        } else {
+            return;
+        };
+        self.primed_audio_specific_config =
+            silence_stream_configuration(sample_rate, channel_configuration)
+                .ok()
+                .map(|(_, audio_specific_config)| audio_specific_config);
+    }
+
+    fn extradata(&self) -> Option<Vec<u8>> {
+        self.primed_audio_specific_config
+            .map(|config| config.to_vec())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -317,7 +384,7 @@ mod tests {
     use crate::{AacLcSilenceAccessUnit, decoder::AacDecoder};
     use vaco_bitstream::BitWriter;
     use vaco_chlayout::ChannelLayout;
-    use vaco_codec_core::{Decoder, SendReceive};
+    use vaco_codec_core::{Decoder, Encoder, SendReceive};
     use vaco_frame::{Frame, FrameData};
     use vaco_limits::{Budget, Limits};
     use vaco_packet::Packet;
@@ -631,6 +698,56 @@ mod tests {
             panic!("expected audio frame");
         };
         assert_eq!((sample_rate, samples, layout.channels), (22_050, 1024, 2));
+    }
+
+    #[test]
+    fn generic_encoder_publishes_primed_asc_and_refuses_mismatched_frames() {
+        let mut encoder: Box<dyn Encoder> =
+            Box::new(AacLcSilenceEncoder::new(Limits::permissive()));
+        assert_eq!(encoder.accepted_sample_fmts(), &[SampleFmt::S16]);
+        assert_eq!(encoder.extradata(), None);
+
+        encoder.prime_audio(22_050, ChannelLayout::STEREO, SampleFmt::S16);
+        assert_eq!(encoder.extradata(), Some(vec![0x13, 0x90]));
+
+        let frame = silence_frame(ChannelLayout::STEREO, 22_050);
+        let mut stream = Vec::new();
+        for index in 0..3 {
+            encoder.send_frame(Some(&frame)).unwrap();
+            let packet = encoder.receive_packet().unwrap();
+            if index == 0 {
+                let mut decoder = AacDecoder::new(Limits::permissive());
+                decoder.send_packet(Some(&packet)).unwrap();
+                let decoded = decoder.receive_frame().unwrap();
+                let FrameData::Audio {
+                    sample_rate,
+                    samples,
+                    layout,
+                    ..
+                } = decoded.data
+                else {
+                    panic!("expected audio frame");
+                };
+                assert_eq!((sample_rate, samples, layout.channels), (22_050, 1024, 2));
+            }
+            stream.extend_from_slice(packet.payload());
+        }
+        assert_playable_adts_bytes(stream, 22_050, 2);
+
+        let mismatched = silence_frame(ChannelLayout::MONO, 22_050);
+        let error = encoder.send_frame(Some(&mismatched)).unwrap_err();
+        assert!(error.to_string().contains("primed stream configuration"));
+    }
+
+    #[test]
+    fn generic_encoder_refuses_late_priming_after_an_unconfigured_packet() {
+        let mut encoder = AacLcSilenceEncoder::new(Limits::permissive());
+        let frame = silence_frame(ChannelLayout::MONO, 48_000);
+        Encoder::send_frame(&mut encoder, Some(&frame)).unwrap();
+        let _ = Encoder::receive_packet(&mut encoder).unwrap();
+
+        Encoder::prime_audio(&mut encoder, 22_050, ChannelLayout::STEREO, SampleFmt::S16);
+        assert_eq!(Encoder::extradata(&encoder), None);
     }
 
     #[test]

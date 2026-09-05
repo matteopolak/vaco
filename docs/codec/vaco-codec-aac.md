@@ -71,8 +71,18 @@ reports AAC, the matching 22.05/24/32/44.1/48 kHz rate, and two channels; `ffmpe
 emits exactly 24,576 zero `f32le` bytes; Vaco also decodes each raw payload
 directly after its matching ASC is set as extradata.
 
-Both are direct APIs only, intentionally not registered generic encoders or
-container integrations. Full AAC-LC encoding still needs transform,
+`AacLcSilenceEncoder` also implements the generic `Encoder` trait without
+adding a registry descriptor. A mux-facing caller can call `prime_audio` with
+one supported packed-`S16` rate/layout before `add_stream`, then obtain the
+matching ASC from `extradata`. Once primed, it refuses a supported frame whose
+rate or mono/stereo layout would require a different ASC, preventing a container
+from carrying stale configuration. Priming after the first emitted packet is
+ignored, so an unconfigured packet cannot acquire incompatible extradata
+retroactively. Invalid priming remains unconfigured and the existing per-frame
+input refusal is still authoritative.
+
+Both remain explicit APIs and are intentionally absent from the generic encoder
+registry and container integrations. Full AAC-LC encoding still needs transform,
 quantisation, rate control, psychoacoustics, channel tools, and mux wiring.
 
 **#446 (SBR/HE-AAC) is in progress, not landed.** This pass built and

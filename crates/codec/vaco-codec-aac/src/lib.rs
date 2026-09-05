@@ -20,8 +20,10 @@
 //! name rather than approximated.
 //! [`AacLcSilenceAccessUnit`] writes a deliberately constrained raw AAC-LC
 //! payload and its out-of-band configuration for exact silent mono or stereo
-//! 22.05, 24, 32, 44.1, or 48 kHz frames. [`AacLcSilenceEncoder`] only adds ADTS framing to
-//! that payload; neither is registered as a general AAC encoder.
+//! 22.05, 24, 32, 44.1, or 48 kHz frames. [`AacLcSilenceEncoder`] only adds
+//! ADTS framing to that payload. It implements the generic encoder trait so a
+//! caller can prime its configuration before adding a stream to a muxer, but
+//! remains unregistered as a general AAC encoder.
 //!
 //! See `docs/codec/vaco-codec-aac.md` for supported configurations, measured
 //! reconstruction quality, and remaining refusal boundaries.
