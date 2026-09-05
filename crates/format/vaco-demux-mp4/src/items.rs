@@ -199,6 +199,12 @@ impl<'a> Meta<'a> {
         if me.infos.iter().any(|info| !item_ids.insert(info.item_id)) {
             return None;
         }
+        if me
+            .primary
+            .is_some_and(|item_id| !item_ids.contains(&item_id))
+        {
+            return None;
+        }
         (handler == Some(bt::PICT)).then_some(me)
     }
 

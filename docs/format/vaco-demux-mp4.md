@@ -824,7 +824,9 @@ crate decides what becomes a stream:
   beyond its `ipco` property list, a duplicate ID, or a descending ID refuses
   the item file rather than applying a partial property configuration. A
   duplicate `iloc` item ID likewise refuses the item file rather than letting
-  first-match range resolution select arbitrary item bytes. An
+  first-match range resolution select arbitrary item bytes. A present `pitm`
+  primary ID must name a declared image item, rather than
+  silently leaving all streams non-default. An
   ordered association may still name an entity group rather than an `iinf`
   item. Duplicate `dimg` records from one grid are malformed rather than an
   invitation to select the first tile graph. An essential property the resolver cannot

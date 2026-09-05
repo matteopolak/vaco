@@ -406,6 +406,23 @@ fn duplicate_item_location_ids_refuse_the_item_table() {
 }
 
 #[test]
+fn an_unknown_primary_item_refuses_the_item_file() {
+    let mut bytes = heif();
+    let pitm = bytes.windows(4).position(|w| w == b"pitm").unwrap();
+    bytes[pitm + 8..pitm + 10].copy_from_slice(&5u16.to_be_bytes());
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    assert!(
+        Mp4Demuxer::open(
+            src,
+            &NoParsers,
+            &FormatOptions::default(),
+            Mp4Options::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn unordered_or_duplicate_property_association_ids_refuse_the_item_file() {
     for item_id in [0u16, 1] {
         let mut bytes = heif();
