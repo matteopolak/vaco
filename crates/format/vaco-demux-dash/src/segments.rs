@@ -203,13 +203,9 @@ fn enumerate_base(
     )
 }
 
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "timescale ticks to microseconds; precision loss is bounded by f64's 52-bit mantissa, far beyond any real timescale or duration"
-)]
 fn ticks_to_duration(ticks: u64, timescale: u64) -> Duration {
-    let secs = ticks as f64 / timescale.max(1) as f64;
-    Duration::from_micros((secs * 1_000_000.0) as i64)
+    Duration::from_fraction(i128::from(ticks), i128::from(timescale.max(1)))
+        .unwrap_or(Duration::ZERO)
 }
 
 #[cfg(test)]
@@ -219,6 +215,11 @@ mod tests {
     use crate::mpd::{Addressing, SegmentList, SegmentTemplate, SegmentUrl};
     use vaco_format_adaptive::TimelineEntry;
     use vaco_limits::Limits;
+
+    #[test]
+    fn ticks_retain_submicrosecond_timescales() {
+        assert_eq!(ticks_to_duration(1, 10_000_000).as_ratio(), (1, 10_000_000));
+    }
 
     fn rep(addressing: Addressing) -> Representation {
         Representation {

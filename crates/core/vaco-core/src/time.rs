@@ -298,6 +298,15 @@ impl Duration {
         Some(Self::from_ratio(i128::from(ticks) * num, den))
     }
 
+    /// Build an exact seconds fraction when the denominator is positive.
+    ///
+    /// Container timescales may exceed [`TimeBase`]'s `i32` storage while
+    /// still fitting the duration representation, so they use this path.
+    #[must_use]
+    pub fn from_fraction(numerator: i128, denominator: i128) -> Option<Self> {
+        (denominator > 0).then(|| Self::from_ratio(numerator, denominator))
+    }
+
     /// Preserve a duration. Kept for callers of the former `ExactDuration` type.
     #[must_use]
     pub const fn from_duration(duration: Self) -> Self {

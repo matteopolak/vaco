@@ -34,6 +34,11 @@ whichever of `Period/@duration` or `MPD/@mediaPresentationDuration` is
 stated; a dynamic (live) MPD with neither enumerates that entry to zero
 segments rather than guessing.
 
+SegmentTimeline tick counts retain their declared timescale as exact rational
+durations. Aggregate duration and segment seeking add and compare those
+values directly, so a `1/10000000`-second segment is not lost through a
+floating-point or microsecond intermediate.
+
 ### Continuity is free here, unlike HLS
 
 `vaco-demux-hls` re-times packets across `#EXT-X-DISCONTINUITY` because a

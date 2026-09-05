@@ -411,15 +411,12 @@ impl Demuxer for DashDemuxer {
             .ok()
             .and_then(|i| self.streams.get(i))
             .ok_or(Error::InvalidData("seek names an unknown stream"))?;
-        let target_us = ts
-            .to_duration(stream.time_base)
-            .ok_or(Error::NotSeekable)?
-            .as_micros();
-        let mut cursor = 0i64;
+        let target = ts.to_duration(stream.time_base).ok_or(Error::NotSeekable)?;
+        let mut cursor = Duration::ZERO;
         let mut landing = self.segment_list.len().saturating_sub(1);
         for (i, seg) in self.segment_list.iter().enumerate() {
-            let end = cursor.saturating_add(seg.duration.as_micros());
-            if target_us < end {
+            let end = cursor.checked_add(seg.duration).ok_or(Error::NotSeekable)?;
+            if target < end {
                 landing = i;
                 break;
             }
@@ -435,11 +432,10 @@ impl Demuxer for DashDemuxer {
         if matches!(self.mpd.presentation_type, PresentationType::Dynamic) {
             return None;
         }
-        let total: i64 = self
-            .segment_list
+        self.segment_list
             .iter()
-            .map(|s| s.duration.as_micros())
-            .sum();
-        Some(Duration::from_micros(total))
+            .try_fold(Duration::ZERO, |total, segment| {
+                total.checked_add(segment.duration)
+            })
     }
 }
