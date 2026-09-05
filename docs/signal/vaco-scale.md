@@ -136,11 +136,13 @@ HLG, and 100 for SDR.
 | `perceptual` | Apply the BT.2390 PQ-domain Hermite EETF when peak decreases, then smooth chroma compression. |
 | `saturation` | Preserve the neutral/chroma direction and scale it to the destination RGB boundary. |
 
-An HDR source whose peak is above the destination always applies BT.2390's
-peak-aware EETF, regardless of intent. The independent `tone_oracle` test owns
-the PQ, BT.709, and Hermite equations so it does not reuse either the production
-transfer implementation or the production LUT builder; the 1,000-to-100-nit
-PQ-to-BT.709 patch set measured a maximum 1 LSB LUT error.
+An HDR source whose peak is above the destination always applies the
+BT.2390-3 Annex 5 peak-aware EETF, regardless of intent. The intent names and
+colourimetric semantics follow ICC.2:2018 §6.3. The independent `tone_oracle`
+test owns the PQ, BT.709, Hermite, Lab, and CIEDE2000 equations so it does not
+reuse either the production transfer implementation or the production LUT
+builder. Its 1,000-to-100-nit coloured PQ-to-BT.709 patch set measures 48.923
+dB PSNR and a maximum ΔE00 of 0.5762 (the required floors are 40 dB and 1.0).
 
 ---
 
@@ -239,7 +241,7 @@ it is checked against an independent high-precision oracle and against ffmpeg's
 direct in-gamut Y'CbCr `colorspace` probes (max 1 LSB, at least 67 dB).
 Tone and gamut LUTs are also Class C: the table is deterministic for a fixed
 grid and options, and tests cover every intent, a published-equation BT.2390
-oracle (max 1 LSB on the HDR patch set), and ffmpeg 9.0.1 tetrahedral
+oracle (48.923 dB PSNR and maximum ΔE00 0.5762 on the HDR patch set), and ffmpeg 9.0.1 tetrahedral
 interpolation (exact on six non-affine simplex-order samples). They are
 intentionally not declared byte-identical to a reference tone mapper because
 ffmpeg 9.0.1 exposes no BT.2390 mode in its `tonemap` filter.
