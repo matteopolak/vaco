@@ -78,6 +78,11 @@ of those two takes it.
 
 ## How it works
 
+The `nullsrc` and `anullsrc` source paths convert finite duration options
+directly to frame or sample ticks with nearest rounding. Keep that exact
+conversion when extending either source; a floating-point seconds intermediate
+can shift an awkward-clock budget at large timestamps.
+
 ### `trim`/`atrim` — the measured boundary (`trim.rs`)
 
 Measured directly against ffmpeg 8.1 (commands and full output in `trim.rs`'s

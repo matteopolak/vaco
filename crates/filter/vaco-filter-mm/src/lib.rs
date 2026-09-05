@@ -61,3 +61,46 @@ pub mod trim;
 pub mod registry;
 
 pub use registry::MmRegistry;
+
+/// Convert a finite media duration into source frames without floating-point
+/// clock arithmetic.
+pub(crate) fn frame_budget(duration: vaco_core::Duration, rate: vaco_core::Rational) -> u64 {
+    duration
+        .to_ticks_rounding(rate.inverse(), vaco_core::Rounding::NearestAwayFromZero)
+        .and_then(|frames| u64::try_from(frames.max(0)).ok())
+        .unwrap_or(0)
+}
+
+/// Convert a finite media duration into source samples without floating-point
+/// clock arithmetic.
+pub(crate) fn sample_budget(duration: vaco_core::Duration, sample_rate: u32) -> u64 {
+    let rate = i32::try_from(sample_rate.max(1)).unwrap_or(1);
+    duration
+        .to_ticks_rounding(
+            vaco_core::Rational::new(1, rate),
+            vaco_core::Rounding::NearestAwayFromZero,
+        )
+        .and_then(|samples| u64::try_from(samples.max(0)).ok())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use vaco_core::{Duration, Rational};
+
+    #[test]
+    fn frame_budget_retains_a_large_awkward_clock_duration() {
+        let frames = 9_007_199_254_740_993_i64;
+        let duration = Duration::from_ticks(frames, Rational::new(1_001, 30_000))
+            .unwrap_or(Duration::ZERO);
+        assert_eq!(super::frame_budget(duration, Rational::new(30_000, 1_001)), frames as u64);
+    }
+
+    #[test]
+    fn sample_budget_retains_a_large_awkward_clock_duration() {
+        let samples = 9_007_199_254_740_993_i64;
+        let duration = Duration::from_ticks(samples, Rational::new(1, 48_000))
+            .unwrap_or(Duration::ZERO);
+        assert_eq!(super::sample_budget(duration, 48_000), samples as u64);
+    }
+}

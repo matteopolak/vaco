@@ -133,11 +133,10 @@ pub mod video {
         let opts = VideoOpts::parse(req.args)?;
         let (width, height) = opts.size;
         let rate = opts.rate.0;
-        let total_frames = if opts.duration.as_micros() < 0 {
+        let total_frames = if opts.duration < vaco_core::Duration::ZERO {
             None
         } else {
-            let secs = opts.duration.as_secs_f64();
-            Some((secs * rate.to_f64()).round().max(0.0) as u64)
+            Some(crate::frame_budget(opts.duration, rate))
         };
         let source = VideoSource {
             width,
@@ -270,14 +269,10 @@ pub mod audio {
         let layout = vaco_chlayout::ChannelLayout::from_name(&opts.channel_layout)
             .ok_or_else(|| format!("anullsrc: bad channel_layout `{}`", opts.channel_layout))?;
         let sample_rate = u32::try_from(opts.sample_rate.max(1)).unwrap_or(44100);
-        let total_samples = if opts.duration.as_micros() < 0 {
+        let total_samples = if opts.duration < vaco_core::Duration::ZERO {
             None
         } else {
-            Some(
-                (opts.duration.as_secs_f64() * f64::from(sample_rate))
-                    .round()
-                    .max(0.0) as u64,
-            )
+            Some(crate::sample_budget(opts.duration, sample_rate))
         };
         let source = AudioSource {
             layout,
