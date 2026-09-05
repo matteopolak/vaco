@@ -29,6 +29,7 @@ use crate::intra_pred;
 use crate::motion::{self, MotionInfo, Mv, PartMode, PuRect, RefList, UniMotion};
 use crate::residual::{self, Coeffs};
 use crate::sao;
+use crate::tile::TileLayout;
 use crate::transform;
 use crate::weight::RefWeights;
 
@@ -110,6 +111,10 @@ pub(crate) struct CtxShared<'p> {
     /// CTU columns per row, for [`sao::parse_ctu_sao`]'s left/above merge
     /// addressing.
     pub ctbs_x: u32,
+    /// Validated tile geometry retained for the post-reconstruction loop
+    /// filter. It is distinct from [`Ctx::tile_ctb_rect`], whose value is
+    /// deliberately the one currently decoded tile substream.
+    pub tile_layout: Option<TileLayout>,
     /// Whether this slice has any inter path at all (P or B) — every
     /// inter-only field below is `Some` exactly when this is `true`. The
     /// name predates B-slice support; [`InterSliceParams::is_b`] is what
@@ -363,6 +368,12 @@ impl<'p> CtxShared<'p> {
         let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
         let ctb_size = 1u32 << log2_ctb_size;
         let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size).max(1);
+        let ctbs_y = sps.pic_height_in_luma_samples.div_ceil(ctb_size).max(1);
+        let tile_layout = pps
+            .tiles
+            .as_ref()
+            .map(|tiles| TileLayout::from_pps(tiles, ctbs_x, ctbs_y))
+            .transpose()?;
         Ok(Self {
             pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
             pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
@@ -392,6 +403,7 @@ impl<'p> CtxShared<'p> {
             sao_luma,
             sao_chroma,
             ctbs_x,
+            tile_layout,
             is_p_slice,
             inter,
             max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,

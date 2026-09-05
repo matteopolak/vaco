@@ -127,10 +127,37 @@ fn tile_pps_maps_raster_ctbs_and_blocks_cross_tile_neighbours() {
     assert!(!layout.starts_new_tile_cabac_substream(3, 0));
     assert!(layout.starts_new_tile_cabac_substream(4, 0));
     assert!(!layout.starts_new_tile_cabac_substream(7, 0));
+    assert!(layout.loop_filter_edge_available(2, 0, 3, 0));
+    assert_eq!(
+        layout.loop_filter_edge_available(3, 0, 4, 0),
+        layout.loop_filter_across_tiles()
+    );
     assert!(layout.left_available(1, 0));
     assert!(!layout.left_available(4, 0));
     assert!(layout.left_available(5, 0));
     assert!(!layout.above_available(0, 0));
+}
+
+#[test]
+fn tile_loop_filter_flag_permits_cross_tile_edges_only_when_set() {
+    let disabled = Tiles {
+        num_columns: 2,
+        num_rows: 1,
+        uniform_spacing: true,
+        column_widths: Vec::new(),
+        row_heights: Vec::new(),
+        loop_filter_across_tiles: false,
+    };
+    let enabled = Tiles {
+        loop_filter_across_tiles: true,
+        ..disabled.clone()
+    };
+    let disabled = TileLayout::from_pps(&disabled, 8, 1).expect("valid two-tile layout");
+    let enabled = TileLayout::from_pps(&enabled, 8, 1).expect("valid two-tile layout");
+
+    assert!(!disabled.loop_filter_edge_available(3, 0, 4, 0));
+    assert!(enabled.loop_filter_edge_available(3, 0, 4, 0));
+    assert!(!enabled.loop_filter_edge_available(7, 0, 8, 0));
 }
 
 #[test]

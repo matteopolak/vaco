@@ -545,13 +545,39 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_, '_, '_, '_>) {
         i32::try_from(height).unwrap_or(0),
     );
 
+    // §8.7.2.1 makes the PPS tile-loop-filter flag a gate only for an edge
+    // whose P and Q samples live in different CTBs/tiles. The edge maps to
+    // the CTB pair on its two sides; normal pictures have no layout and keep
+    // the existing unrestricted pass.
+    let filter_edge_available = |dir, x: i32, y: i32| {
+        let ctb_size = 1i32 << s.shared.log2_ctb_size;
+        let (p_x, p_y, q_x, q_y) = match dir {
+            Dir::Vert => (x - 1, y, x, y),
+            Dir::Horiz => (x, y - 1, x, y),
+        };
+        let Some(layout) = s.shared.tile_layout.as_ref() else {
+            return true;
+        };
+        #[allow(
+            clippy::integer_division,
+            reason = "sample coordinates map to their containing CTB by floor division"
+        )]
+        let to_ctb = |sample: i32| u32::try_from(sample / ctb_size).ok();
+        let (Some(p_x), Some(p_y), Some(q_x), Some(q_y)) =
+            (to_ctb(p_x), to_ctb(p_y), to_ctb(q_x), to_ctb(q_y))
+        else {
+            return false;
+        };
+        layout.loop_filter_edge_available(p_x, p_y, q_x, q_y)
+    };
+
     // Vertical edges: luma at every `grid` column, chroma at every
     // `chroma_grid` column (see the module doc for why chroma is coarser).
     let mut x = grid;
     while x < width {
         let mut y = 0;
         while y < height {
-            if s.edges.vert_at(x, y) {
+            if filter_edge_available(Dir::Vert, x, y) && s.edges.vert_at(x, y) {
                 let bs = boundary_strength(s, Dir::Vert, x, y);
                 if bs > 0 {
                     let qp = qp_avg(s, Dir::Vert, x, y);
@@ -582,7 +608,10 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_, '_, '_, '_>) {
             // §8.7.2's own chroma gate: filtered only when `bS == 2` (see
             // this module's doc — chroma has no `alpha`/`beta` activity test
             // of its own, so `bS` is the only gate it has).
-            if s.edges.vert_at(x, y) && boundary_strength(s, Dir::Vert, x, y) == 2 {
+            if filter_edge_available(Dir::Vert, x, y)
+                && s.edges.vert_at(x, y)
+                && boundary_strength(s, Dir::Vert, x, y) == 2
+            {
                 let qp = qp_avg(s, Dir::Vert, x, y);
                 let cb_tc = tc_for_qp(
                     chroma_qp(qp, s.shared.cb_qp_offset),
@@ -631,7 +660,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_, '_, '_, '_>) {
     while y < height {
         let mut x = 0;
         while x < width {
-            if s.edges.horiz_at(x, y) {
+            if filter_edge_available(Dir::Horiz, x, y) && s.edges.horiz_at(x, y) {
                 let bs = boundary_strength(s, Dir::Horiz, x, y);
                 if bs > 0 {
                     let qp = qp_avg(s, Dir::Horiz, x, y);
@@ -659,7 +688,10 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_, '_, '_, '_>) {
     while y < height {
         let mut x = 0;
         while x < width {
-            if s.edges.horiz_at(x, y) && boundary_strength(s, Dir::Horiz, x, y) == 2 {
+            if filter_edge_available(Dir::Horiz, x, y)
+                && s.edges.horiz_at(x, y)
+                && boundary_strength(s, Dir::Horiz, x, y) == 2
+            {
                 let qp = qp_avg(s, Dir::Horiz, x, y);
                 let cb_tc = tc_for_qp(
                     chroma_qp(qp, s.shared.cb_qp_offset),

@@ -862,9 +862,9 @@ impl HevcDecoder {
                             "vaco-codec-hevc: tile pictures with cu_qp_delta are not supported",
                         ));
                     }
-                    if !parsed.deblocking_filter_disabled || parsed.sao_luma || parsed.sao_chroma {
+                    if parsed.sao_luma || parsed.sao_chroma {
                         return Err(Error::Unsupported(
-                            "vaco-codec-hevc: tile loop filtering is not supported",
+                            "vaco-codec-hevc: tile SAO filtering is not supported",
                         ));
                     }
                     let segment_qp = 26 + pps.init_qp_minus26 + parsed.qp_delta;

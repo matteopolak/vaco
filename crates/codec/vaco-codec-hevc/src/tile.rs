@@ -698,6 +698,18 @@ impl TileLayout {
     pub const fn loop_filter_across_tiles(&self) -> bool {
         self.loop_filter_across_tiles
     }
+
+    /// Whether a loop-filter edge between adjacent CTBs is permitted.
+    ///
+    /// Edges inside one tile are always permitted. A boundary between tiles
+    /// follows PPS `loop_filter_across_tiles_enabled_flag`; invalid or
+    /// out-of-picture coordinates are unavailable.
+    #[must_use]
+    pub fn loop_filter_edge_available(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> bool {
+        self.tile_at(x0, y0)
+            .zip(self.tile_at(x1, y1))
+            .is_some_and(|(left, right)| left == right || self.loop_filter_across_tiles)
+    }
 }
 
 #[allow(

@@ -959,7 +959,7 @@ unproven non-row-aligned boundaries remain named refusals.
 
 `TileLayout` validates the PPS geometry and maps tile IDs to half-open CTB
 rectangles. The decoder accepts one independent, full-picture tiles-only slice
-with deblocking, SAO, and `cu_qp_delta` disabled. It partitions the escaped
+with SAO and `cu_qp_delta` disabled. It partitions the escaped
 slice payload at §7.4.7.1 entry points, de-escapes each tile range
 independently, and initializes fresh arithmetic and CABAC context state for
 every tile. CABAC states are suspended between tile rows so CTUs reconstruct in
@@ -974,10 +974,16 @@ decodes the whole access unit and compares the 49,152 visible yuv420p bytes
 byte-for-byte with an independently generated ffmpeg reference (MD5
 `6ccc33b0cd92240a275d30a05de031cc`).
 
+The regular deblock pass derives each filtered edge's two CTBs and suppresses
+only a cross-tile edge when PPS
+`loop_filter_across_tiles_enabled_flag` is clear; edges within a tile and all
+cross-tile edges when it is set keep the ordinary filtering path. Tile SAO is
+still a named refusal because its snapshot/filter neighbourhood rules have not
+yet been made tile-aware.
+
 Multiple or dependent tile slices, tiles combined with WPP, tile pictures with
-`cu_qp_delta`, and tile pictures requiring deblocking or SAO remain named
-refusals. Their slice-state and filtering rules must be integrated before
-extending this scope.
+`cu_qp_delta`, and tile pictures requiring SAO remain named refusals. Their
+slice-state and filtering rules must be integrated before extending this scope.
 
 ## Per-CU QP delta (`cu_qp_delta`), landed
 
