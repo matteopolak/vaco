@@ -246,3 +246,10 @@ file   = "crates/codec/vaco-codec-av1/src/transform.rs"
 source = "aom-av1-spec"
 clause = "§7.13.2.1, Cos128_Lookup[65]"
 method = "transcribed"
+
+[[table]]
+name   = "UPSCALE_FILTER"
+file   = "crates/codec/vaco-codec-av1/src/superres.rs"
+source = "aom-av1-spec"
+clause = "§7.16, Upscale_Filter[64][8]"
+method = "transcribed"
