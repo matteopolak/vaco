@@ -10,7 +10,7 @@
 //!
 //! Rather than sprinkle `#[cfg(target_family = "wasm")]` through every crate
 //! that wants a deadline or a seed, the clock lives here and nowhere else. This
-//! is the [D11] adapter rule applied to a platform capability instead of to an
+//! is the one-door adapter rule applied to a platform capability instead of to an
 //! external crate: one door, so the port is one file.
 //!
 //! # The two clocks are deliberately different types
@@ -40,11 +40,8 @@
 //! Turning the `web` feature on is the intended fix, backing both with
 //! `web-time` (`performance.now()` and `Date.now()`). It is declared and
 //! documented but not yet wired, because adding a dependency before there is a
-//! wasm build to test it against would be adopting a crate on faith — and [D10]
-//! makes every adoption a reviewed decision. See `docs/core/vaco-time.md`.
-//!
-//! [D10]: ../../../planning/00-decisions.md
-//! [D11]: ../../../planning/00-decisions.md
+//! wasm build to test it against would be adopting a crate on faith — every
+//! adoption is a reviewed decision. See `docs/core/vaco-time.md`.
 
 #![forbid(unsafe_code)]
 #![no_std]
@@ -272,9 +269,6 @@ mod tests {
 
     #[test]
     fn availability_matches_the_wall_clock() {
-        // On every target Vaco currently builds for, either both clocks are
-        // real or neither is. If that ever stops holding, this test is the
-        // place to record why.
         assert_eq!(Instant::is_available(), unix_nanos().is_some());
     }
 }
