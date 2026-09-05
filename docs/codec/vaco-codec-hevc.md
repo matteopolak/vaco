@@ -924,6 +924,16 @@ context. The checked-in 31,461-byte stream (SHA-256
 to 48 192x240 frames and 3,317,760 exact yuv420p bytes, MD5
 `2aaf16274fe8e799d72fa08a4963850d`.
 
+The `jctvc-hevc-wpp-a-ericsson-main-2` (`WPP_A_ericsson_MAIN_2`)
+fixture extends that proof to seven CTUs per row (416x240). Its 48 pictures
+use a finite set of arbitrary partial-row boundaries, mixing dependent
+segments with independent segments that restart CABAC at those boundaries.
+The checked-in 67,554-byte stream has SHA-256
+`54d896d9fbdfa0aae15629001105c6ee132c8459e152abb06efc62cead4324ae` and
+decodes to exactly 7,188,480 yuv420p bytes. Vaco matches the archive's
+`cd7e815eb47e8138fec2185d4de84304` MD5 and every Y, U, and V byte. Other
+non-row-aligned WPP boundaries and tile pictures remain named refusals.
+
 ## Tile pictures — named refusal verified by a real two-column stream
 
 Tiles remain out of scope because the CTU walk and its neighbour-availability

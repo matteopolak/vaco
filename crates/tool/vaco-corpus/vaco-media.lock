@@ -175,7 +175,7 @@ targets = []
 # MiB (`cavlc_mot_*_full*.zip`, `Sharp_MP_*`) — MBAFF coverage here is
 # therefore field/frame-switching only (`CVFI1_SVA_C`), not true MBAFF.
 #
-# jctvc (49 entries, HEVC_v1): I_PCM, constrained intra prediction, merge/
+# jctvc (50 entries, HEVC_v1): I_PCM, constrained intra prediction, merge/
 # parallel-merge, AMVP, deblocking, parameter-set edge cases (PS/VPSID/
 # VPSSPSPPS/CONFWIN), SAO, temporal scalability, motion-vector edge/clipping,
 # slices, residual quad-tree (RQT), reference picture sets/lists (RPS/RPLM),
@@ -193,7 +193,7 @@ targets = []
 # of them. `RExt`/`SCC`/`SHVC`/`MV-HEVC`/`3D-HEVC` (range extensions,
 # screen content, scalable/multiview/3D) are separate JCT-VC directories not
 # touched at all — out of scope for a HEVC v1 (Main/Main10) conformance pass.
-# WPP_D, WPP_E, and WPP_F below are the bounded exceptions to the omitted WPP
+# WPP_A, WPP_D, WPP_E, and WPP_F below are the bounded exceptions to the omitted WPP
 # family.
 
 
@@ -849,6 +849,17 @@ license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1)
 source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
 targets = ["hevc_decode"]
 member = "VPSSPSPPS_A_MainConcept_1.bin"
+
+[[entry]]
+name = "jctvc-hevc-wpp-a-ericsson-main-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/WPP_A_ericsson_MAIN_2.zip"
+sha256 = "81c601e9301ba5f562ebf9918e73d1c7153e0a6fe8fa4509f61035a212188216"
+size = 4110130
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-05"
+targets = ["hevc_decode"]
+member = "WPP_A_ericsson_MAIN_2.bit"
 
 [[entry]]
 name = "jctvc-hevc-wpp-d-ericsson-main-2"

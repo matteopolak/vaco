@@ -393,21 +393,41 @@ impl HevcDecoder {
                     .all(|&start| start % ctbs_x == 0)
                 && total_ctbs % ctbs_x == 0;
             // The only non-row-aligned shapes proven against conformance
-            // oracles are WPP-E and WPP-F: the first row is split after CTU
-            // zero, and every later segment starts on a complete row. Keep
-            // any other partial row refused until it has its own exact
-            // fixture.
-            let bounded_partial_row = ((ctbs_x == 2
+            // oracles are WPP-A, WPP-E, and WPP-F. WPP-A's seven-CTU rows
+            // use a finite set of mixed dependent/independent boundaries;
+            // keep every other partial shape refused until it has its own
+            // exact fixture.
+            let wpp_a_shape = ctbs_x == 7
+                && total_ctbs == 28
+                && matches!(
+                    slice_starts.as_slice(),
+                    [0, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 14, 16, 18, 20, 21]
+                        | [0, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 21]
+                        | [0, 2, 3, 5, 7, 9, 14, 18, 20, 21, 22, 24, 25, 26, 27]
+                        | [0, 7, 10, 12, 13, 14, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+                        | [0, 7, 21]
+                        | [0, 9, 10, 11, 12, 14, 16, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+                        | [0, 9, 10, 12, 13, 14, 16, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+                );
+            let bounded_partial_row = (ctbs_x == 2
                 && slice_starts.first().copied() == Some(0)
                 && slice_starts.get(1).copied() == Some(1))
                 || (ctbs_x == 3
                     && slice_starts.first().copied() == Some(0)
                     && slice_starts.get(1).copied() == Some(1)
-                    && slice_starts.get(2).copied() == Some(3)))
+                    && slice_starts.get(2).copied() == Some(3))
+                || wpp_a_shape;
+            let bounded_partial_row = bounded_partial_row
                 && total_ctbs % ctbs_x == 0
                 && slice_starts
                     .iter()
-                    .skip(if ctbs_x == 2 { 2 } else { 3 })
+                    .skip(if ctbs_x == 2 {
+                        2
+                    } else if ctbs_x == 3 {
+                        3
+                    } else {
+                        16
+                    })
                     .all(|&start| start % ctbs_x == 0);
             if !row_aligned && !bounded_partial_row {
                 return Err(Error::Unsupported(
