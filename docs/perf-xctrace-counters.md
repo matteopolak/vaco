@@ -1,10 +1,9 @@
 # macOS CPU-counter comparisons
 
-`scripts/perf-xctrace-counters.py` compares Vaco, ffmpeg, and an optional
-candidate on macOS through Instruments' CPU Counters instrument. It is the
-Apple-silicon process-counter counterpart to Linux `scripts/perf-hwcycles.py`.
-It reports named CPU cycles and retired instructions, with target CPU and wall
-seconds as secondary metrics. It does not convert time to cycles.
+`scripts/perf-xctrace-counters.py` is a guarded experiment for macOS
+Instruments CPU Counters. It only emits a Vaco:ffmpeg comparison when
+Instruments exports named, process-aggregate CPU cycles and retired
+instructions. It never converts time or sampled per-core values into cycles.
 
 ## How it works
 
@@ -42,7 +41,7 @@ machine/OS recorded in the JSON, and workload thread count when comparing
 results. Treat ratios as same-host, same-template evidence rather than a
 cross-machine baseline.
 
-### Calibrated default-template limitation
+### Current Xcode 16 limitation
 
 On 2026-09-04, a capped one-second `/usr/bin/yes` recording with Xcode's
 CLI-selectable `CPU Counters` template exported
@@ -56,10 +55,22 @@ that real export with a missing-`instructions` error.
 `xctrace record` accepts a template path/name and instrument name, but has no
 flag to select CPU Counters' event/counting configuration. Therefore a
 CLI-only invocation cannot turn the stock bottleneck template into an
-instructions-counting template. Save the configured template in the Instruments
-GUI and supply its path via `--template`; then re-run the example below and add
-the resulting process XML shape as a parser fixture before treating the output
-as Vaco:ffmpeg evidence.
+instructions-counting template.
+
+On this machine with Xcode 16.0, a manually configured template containing
+`Cycles (FIXED_CYCLES)` and `Instructions (FIXED_INSTRUCTIONS)` records those
+named events, but its TOC contains `counters-profile` rather than
+`CounterMetricAggregatedForProcess`. The exported values are sampled per-core
+counter snapshots: a target can migrate between P and E cores and the values
+reset to the destination core's counter. They are not process totals and must
+not be summed. The driver detects this shape and refuses it with an explicit
+error.
+
+As a result, this is not currently an end-to-end macOS hardware-counter
+workflow. Use `scripts/perf-hwcycles.py` on real Linux hardware with PMU access
+for primary cycles/instructions, and retain macOS wall/CPU seconds only as
+secondary context. If a future Instruments export exposes named process
+aggregates, add its XML as a parser fixture, then re-enable this path.
 
 Example:
 
@@ -111,7 +122,9 @@ command labels. Labels beginning with `vaco`, `ffmpeg`/`ffprobe`, and
 - Xcode Instruments and `/usr/bin/xctrace`, including the CPU Counters
   template and permission to profile the launched process.
 - A saved CPU Counters *counting-mode* template with named cycle and retired
-  instruction events available on the local Apple-silicon machine.
+  instruction events available on the local Apple-silicon machine. Xcode 16's
+  manual fixed-counter template is intentionally rejected until it exports a
+  process aggregate.
 - Python 3 and the standard library.
 - `/usr/bin/time` for target CPU/wall secondary metrics.
 - `samply` only when diagnostic flamegraphs are requested.

@@ -80,6 +80,12 @@ class XcTraceParserTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "instructions"):
             MODULE.parse_process_counters(XCTRACE_BOTTLENECK_EXPORT, "yes")
 
+    def test_refuses_sampled_per_core_manual_counter_exports(self):
+        message = MODULE._missing_process_schema_error({"counters-profile"})
+
+        self.assertIn("sampled per-core", message)
+        self.assertIn("would not be a process counter total", message)
+
 
 class HarnessSummaryTests(unittest.TestCase):
     def test_rotates_three_command_order_every_round(self):

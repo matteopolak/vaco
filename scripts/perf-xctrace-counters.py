@@ -292,6 +292,23 @@ def _run(command, *, capture_output=True):
                           stderr=subprocess.PIPE, check=False)
 
 
+def _missing_process_schema_error(schemas):
+    """Explain why an Instruments trace cannot support a process-total ratio."""
+    if "counters-profile" in schemas:
+        return (
+            "CPU Counters exported sampled per-core counters-profile rows, not "
+            f"{PROCESS_SCHEMA}. Their values reset when a target migrates between "
+            "cores, so summing them would not be a process counter total. Use a "
+            "template/export that exposes a named process aggregate; do not use this "
+            "sampled trace for Vaco:ffmpeg ratios."
+        )
+    listed = ", ".join(sorted(schema for schema in schemas if schema)) or "none"
+    return (
+        f"CPU Counters template did not expose {PROCESS_SCHEMA}; found: {listed}. "
+        "Use a saved counting-mode CPU Counters template."
+    )
+
+
 def _find_process_schema(xctrace, trace_path):
     toc = _run([xctrace, "export", "--input", str(trace_path), "--toc"])
     if toc.returncode != 0:
@@ -306,11 +323,7 @@ def _find_process_schema(xctrace, trace_path):
         if "schema" in element.attrib
     }
     if PROCESS_SCHEMA not in schemas:
-        listed = ", ".join(sorted(schema for schema in schemas if schema)) or "none"
-        raise RuntimeError(
-            f"CPU Counters template did not expose {PROCESS_SCHEMA}; found: {listed}. "
-            "Use a saved counting-mode CPU Counters template."
-        )
+        raise RuntimeError(_missing_process_schema_error(schemas))
 
 
 def _export_process_table(xctrace, trace_path):
