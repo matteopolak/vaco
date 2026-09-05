@@ -122,6 +122,15 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         *probe.detect(&mut io, Some(url), None)?.desc
     };
 
+    if let Some(name) = format_opts.configured_mpegts_option()
+        && desc.name != "mpegts"
+    {
+        return Err(Error::Option {
+            name: name.to_owned(),
+            detail: format!("not supported by the {} demuxer", desc.name),
+        });
+    }
+
     if (req.decryption_key.is_some() || !req.decryption_keys.is_empty())
         && desc.name != vaco_demux_mp4::DEMUXER.name
     {
@@ -318,6 +327,27 @@ mod tests {
         match error {
             Error::Option { name, detail } => {
                 assert_eq!(name, "decryption_keys");
+                assert!(detail.contains("matroska"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_pmt_versions_is_refused_for_a_non_mpegts_demuxer() {
+        let opts = FormatOptions {
+            merge_pmt_versions: true,
+            ..FormatOptions::default()
+        };
+        let req = OpenRequest {
+            force_format: Some("matroska"),
+            format_opts: Some(&opts),
+            ..OpenRequest::default()
+        };
+        let error = open(0, "/etc/hosts", &req).unwrap_err();
+        match error {
+            Error::Option { name, detail } => {
+                assert_eq!(name, "merge_pmt_versions");
                 assert!(detail.contains("matroska"), "{detail}");
             }
             other => panic!("{other:?}"),

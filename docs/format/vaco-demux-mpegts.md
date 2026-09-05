@@ -283,18 +283,25 @@ measured against `ffprobe 8.1 -f mpegtsraw`, not derived:
 
 ### PMT version changes
 
-`ffmpeg -h demuxer=mpegts` names the option directly: `-merge_pmt_versions
-<boolean>` — *"reuse streams when PMT's version/pids change"* — **default
-`false`**. That is a measured correction from inference to fact for what this
-doc already suspected: the reference's *default* behaviour is **not** to merge
-a version change into the existing stream set, but to create fresh stream
-entries for it, which is why a long recording of a re-multiplexing channel
-ends up with a dozen streams over time in the reference. This crate always
-merges (a PID already carrying a stream keeps it, permanently) and does not
-implement the option — see *Deliberately deferred* — because doing the
-default's thing needs the PID-to-many-streams mapping this crate does not
-have anywhere else either (teletext, subtitling: same gap, different
-descriptor).
+`ffmpeg -h demuxer=mpegts` on the pinned 9.0.1 binary lists one PMT-policy
+switch: `-merge_pmt_versions <boolean>`, **default `false`**. A real
+ffmpeg-generated H.264 transport stream whose PMT moves the elementary PID
+from `0x100` to `0x101` gives two streams by default (`0x100`, `0x101`) and
+one original stream (`0x100`) with the switch enabled. The same result holds
+when the replacement PMT declares a different stream type; reuse is an
+identity policy, not a codec-parameter update. A version bump with the same
+PID leaves one stream in either mode.
+
+The demuxer keeps an active, position-preserving stream-index vector per
+program PMT. In the default mode a new PID receives a new stream while the old
+PID remains in the historical list. In merge mode the replacement PID's PES
+assembler is attached to the matching earlier stream index, retaining that
+stream's ID and parameters. Both PID assemblers can therefore finish
+already-started PES packets without relabelling them. Invalid or null entries
+retain an empty position so they cannot shift a later replacement mapping. This
+is deliberately separate from PSI/PES syntax: ISO/IEC 13818-1 §2.4.4.8 defines
+the PMT's structure, while the stream-reuse policy is reference-observed
+behaviour.
 
 What *is* implemented: `DemuxStats::pmt_updates` counts a genuine
 `version_number` change on an already-known program, so a caller can at least
@@ -353,6 +360,11 @@ touching a frozen interface.
   the synthetic one for streams belonging to no program. `program_slot` creates
   both together for exactly this reason; a drift between them corrects one
   stream's wrap and not another's.
+* **PMT policy has two state layers.** `pmt_counted_version` is diagnostics
+  only and intentionally ignores header scans; `pmt_active_streams` records
+  the latest PMT entry-to-stream mapping and drives `merge_pmt_versions`.
+  Do not collapse them, or a tail scan can make the live read miscount a PMT
+  change or bind a replacement PID to the wrong stream.
 
 ---
 
@@ -361,7 +373,13 @@ touching a frozen interface.
 `FormatOptions` fields honoured: `probesize`, `duration_probesize`,
 `skip_estimate_duration_from_pts`, `max_streams`, `correct_ts_overflow`,
 `indexmem` (through `PacketIndex::with_options`), `seek2any` and `fflags`
-(through the core's helpers).
+(through the core's helpers), plus the MPEG-TS-only
+`merge_pmt_versions` policy. The CLI accepts the latter only on an input whose
+selected demuxer is `mpegts`; it rejects every other input format and all
+outputs instead of accepting a no-op. `DemuxerDesc::open` begins with default
+options, so `MpegTsDemuxer::reconfigure` replays its eager header pass at the
+detected packet boundary under the selected options before `Discovery` refreshes
+its stream snapshot.
 
 Constants that are ours:
 
@@ -661,14 +679,10 @@ in descending order of cost.
   the four-byte `TP_extra_header`'s 27 MHz arrival timestamp is skipped rather
   than exposed, because `PacketSideData` has no variant for it and plan 18
   §3.3.3 item 14 says it is "used for nothing else".
-* **`merge_pmt_versions` / `skip_changes` / `skip_clear`.** A PID already
-  carrying a stream keeps it; a PMT version change does not currently create new
-  streams. The reference's *default* (`merge_pmt_versions=false`, measured via
-  `ffmpeg -h demuxer=mpegts`) does create them, which is why a long recording
-  of a re-multiplexing channel ends up with a dozen streams. Matching that
-  needs the option set, and the option set needs the PID-to-many-streams
-  mapping above. `DemuxStats::pmt_updates` at least makes the change visible;
-  see *PMT version changes* above.
+* **Other PMT-change controls.** The pinned 9.0.1 `mpegts` demuxer help lists
+  no `skip_changes` or `skip_clear` option. They are not accepted aliases here:
+  inventing a control from an older survey would make a command appear
+  portable when the measured reference does not expose it.
 * **NIT, EIT, TDT/TOT.** Framed and CRC-checked by the tables crate, not acted
   on. Only SDT changes printed output today.
 * **CAT and descrambling.** The CAT is parsed and discarded. Scrambled packets
@@ -681,8 +695,8 @@ in descending order of cost.
 
 ## Testing
 
-* **62 tests**: 30 unit (9 of them `raw`'s), 25 named integration cases, 6
-  property tests, 1 doctest, plus the `#[ignore]`d reference harness.
+* Unit, named integration and property tests, plus the `#[ignore]`d reference
+  harness, cover the demuxer's packet, PMT and seek paths.
 * **Every fixture is built in-process** by `tests/roundtrip.rs`'s `TsWriter`.
   A committed `.ts` file would be larger and less specific: the whole
   difficulty of this container is in cases — a wrap, a mid-stream PMT, an

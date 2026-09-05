@@ -484,6 +484,18 @@ pub struct FormatOptions {
     #[opt(name = "recursion_limit", help = "maximum depth of nested demuxer opens",
           default = 10, range = 0..=1000, flags(decoding))]
     pub recursion_limit: i32,
+
+    /// MPEG-TS PMT-version policy. This is the one format-private exception
+    /// carried through the generic table because [`crate::DemuxerDesc::open`]
+    /// has no private-options parameter; [`Self::configured_mpegts_option`]
+    /// keeps its CLI scope check tied to this declaration.
+    #[opt(
+        name = "merge_pmt_versions",
+        help = "reuse streams when MPEG-TS PMT versions change PIDs",
+        default = false,
+        flags(decoding)
+    )]
+    pub merge_pmt_versions: bool,
 }
 
 /// Smallest buffer the format-detection retry loop starts from.
@@ -504,6 +516,19 @@ pub const PROBE_BUF_MAX: usize = 1 << 20;
 pub const DEFAULT_DURATION_PROBESIZE: u64 = 250 * 1024;
 
 impl FormatOptions {
+    /// The configured MPEG-TS-private option name, if any.
+    ///
+    /// Kept next to its definition so callers can reject it for every other
+    /// demuxer without maintaining a second list of names.
+    #[must_use]
+    pub const fn configured_mpegts_option(&self) -> Option<&'static str> {
+        if self.merge_pmt_versions {
+            Some("merge_pmt_versions")
+        } else {
+            None
+        }
+    }
+
     /// Split a comma-separated list option into its entries, trimmed, with
     /// empties dropped.
     ///
@@ -752,6 +777,8 @@ mod tests {
         assert_eq!(o.err_detect, ErrDetectFlags::CRCCHECK);
         assert!(o.correct_ts_overflow);
         assert!(!o.seek2any);
+        assert!(!o.merge_pmt_versions);
+        assert_eq!(o.configured_mpegts_option(), None);
     }
 
     /// `avioflags`/`packetsize`/`cryptokey`/`fdebug`/
@@ -821,8 +848,8 @@ mod tests {
 
     #[test]
     fn option_names_are_the_reference_set() {
-        // The exact list from `ffmpeg -h full`, in its order, plus our one
-        // documented extension at the end.
+        // The exact list from `ffmpeg -h full`, in its order, plus our
+        // documented extensions at the end.
         let expected = [
             "avioflags",
             "probesize",
@@ -862,6 +889,7 @@ mod tests {
             "max_probe_packets",
             "duration_probesize",
             "recursion_limit",
+            "merge_pmt_versions",
         ];
         let got: Vec<&str> = schema_of::<FormatOptions>()
             .options
@@ -869,6 +897,14 @@ mod tests {
             .map(|o| o.name)
             .collect();
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn mpegts_private_option_name_is_derived_from_its_value() {
+        let mut o = FormatOptions::default();
+        assert_eq!(o.configured_mpegts_option(), None);
+        o.merge_pmt_versions = true;
+        assert_eq!(o.configured_mpegts_option(), Some("merge_pmt_versions"));
     }
 
     #[test]

@@ -11,6 +11,13 @@
 # document — permitted by D6, and a different kind of evidence, so it is
 # labelled as one.
 
+[[source]]
+id       = "ffmpeg-mpegts-pmt-9-0-1-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 9.0.1 MPEG-TS PMT-version and PID-reconfiguration behaviour"
+acquired = "2026-09-04"
+where    = "Local measurement: ffmpeg generated an H.264 transport stream; an independent throwaway section writer bumped the PMT version and moved its elementary PID from 0x100 to 0x101. ffprobe -f mpegts reported two streams by default and one original 0x100 stream with -merge_pmt_versions 1; an unchanged PID stayed one in both modes and a changed declared stream type still reused the original stream. The 9.0.1 option listing names merge_pmt_versions but no skip_changes or skip_clear."
+
 # ---------------------------------------------------------------- standards
 
 [[source]]

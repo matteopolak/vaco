@@ -528,7 +528,10 @@ written once so each muxer does not re-derive it.
 * **Adding a `FormatOptions` field** means adding it in the reference's own
   order, because `-h demuxer=…` prints in declaration order and a test pins the
   whole list. If the reference does not have the option, say so in its doc
-  comment — `recursion_limit` is the one such field today.
+  comment — `recursion_limit` is the one such field today. A frozen descriptor
+  may require a narrowly documented transport exception: `merge_pmt_versions`
+  is declared once here, then its accessor drives CLI scope rejection and the
+  MPEG-TS reconfigure path.
 * **Do not add a `HashMap` anywhere.** Iteration order is output order (DD2).
 * **Adding a `Muxer` method.** Default it. Container crates are written against
   this trait in parallel with the core, and an undefaulted method breaks all of
@@ -551,10 +554,10 @@ written once so each muxer does not re-derive it.
 
 ## Configuration
 
-`FormatOptions` is the whole table: 38 options reproduced from the reference by
-name, type, default and named constants, plus one of ours. Values were read from
-`ffmpeg -h full`'s `AVFormatContext AVOptions` block on the pinned reference —
-black-box observation of a shipped binary, which is what D6 and D7 permit.
+`FormatOptions` carries the generic `AVFormatContext` table plus two documented
+extensions. Values for the generic entries were read from `ffmpeg -h full`'s
+`AVFormatContext AVOptions` block on the pinned reference — black-box
+observation of a shipped binary, which is what D6 and D7 permit.
 
 Three corrections to `planning/18-formats.md` §1.11, which was written from an
 older survey:
@@ -566,6 +569,11 @@ older survey:
   security bound on nested demuxer opens (concat lists, HLS variants), enforced
   here so no nested demuxer can forget it. Being a strict superset breaks no
   script — D17's converse case.
+* `merge_pmt_versions` is a private MPEG-TS demuxer option, measured from
+  `ffmpeg -h demuxer=mpegts` on 9.0.1, not from the generic table. The frozen
+  `DemuxerDesc::open` signature has no private-options parameter, so this
+  field transports it to `MpegTsDemuxer::reconfigure`; its single accessor
+  lets the CLI reject it for non-MPEG-TS inputs and every output.
 
 Constants defined here rather than taken from the reference, each recorded as a
 choice rather than presented as reproduction:
@@ -672,8 +680,10 @@ change, verified each time with a full `cargo check --workspace
   returns. `Discovery::run` calls `reconfigure` before reading anything;
   `MuxBuilder::open` calls `set_option` for every queued private option
   before `init`. Neither can influence anything a container reads eagerly
-  *inside* `open` itself — closing that needs the `open`-signature change
-  a whole-workspace wave would take (see *Signature gaps* below).
+  *inside* `open` itself — except an opt-in demuxer can replay a seekable eager
+  header in `reconfigure`, as MPEG-TS does for its PMT policy. Closing the
+  general case still needs the `open`-signature change a whole-workspace wave
+  would take (see *Signature gaps* below).
 
 - **`MuxerDesc::probe_flags()`** — a method, not a field, because every one
   of the ~90 `MuxerDesc` literals lists every field with no `..base`

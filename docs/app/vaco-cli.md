@@ -944,6 +944,14 @@ count regardless. `-threads N` always overrides the default, including
 No environment variables and no configuration files. Everything is an option,
 and every option is in `vaco_cli_core::table::ffmpeg()`.
 
+`-merge_pmt_versions <boolean>` is an input-only MPEG-TS demuxer option. Its
+definition lives in `FormatOptions`, so the option oracle, parser and input
+open path share one declaration; `input::open` rejects it after probing if the
+selected demuxer is not `mpegts`, and `cli::parse` rejects output placement.
+The `mpegts` demuxer rebuilds its eager stream list through `Discovery` before
+any packet is read, so the selected PMT policy is observable through the CLI
+rather than only through its direct Rust constructor.
+
 Cargo features: none of its own. What the binary can *do* is decided by
 `vaco-registry`'s feature set (`demux-matroska`, `demux-mp4`, `demux-mpegts`,
 `protocol-http`).

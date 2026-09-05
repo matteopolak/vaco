@@ -376,6 +376,10 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
         let url = url_of(g)?;
         let end = end_bound_of(g, "output")?;
         validate_bounds(g.index, None, end, &url, "output")?;
+        let format_opts = format_options_of(g)?;
+        if let Some(name) = format_opts.configured_mpegts_option() {
+            return Err(input_only_option(name));
+        }
         cli.outputs.push(OutputSpec {
             index: g.index,
             url,
@@ -387,7 +391,7 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
                 subtitle: g.last("sn").is_some(),
                 data: g.last("dn").is_some(),
             },
-            format_opts: format_options_of(g)?,
+            format_opts,
             map_chapters: last_value(g, "map_chapters")?.as_deref().map(leading_int),
             map_metadata: last_value(g, "map_metadata")?.as_deref().map(leading_int),
             attach: attach_of(g)?,
@@ -646,6 +650,15 @@ fn unimplemented_option(name: &str) -> Diagnostic {
         AvError::ENOSYS,
         vec![format!(
             "-{name} is accepted by this build's option table but not implemented yet; see docs/app/vaco-cli.md."
+        )],
+    )
+}
+
+fn input_only_option(name: &str) -> Diagnostic {
+    Diagnostic::new(
+        AvError::EINVAL,
+        vec![format!(
+            "Option {name} cannot be applied to an output file: it is an input-only MPEG-TS demuxer option."
         )],
     )
 }
@@ -1214,6 +1227,31 @@ mod tests {
             opts.fflags
                 .contains(vaco_format_core::options::FFlags::GENPTS)
         );
+    }
+
+    #[test]
+    fn merge_pmt_versions_reaches_the_input_format_options() {
+        let cli = parse(&[
+            "-merge_pmt_versions",
+            "1",
+            "-f",
+            "mpegts",
+            "-i",
+            "in.ts",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        assert!(cli.inputs[0].format_opts.merge_pmt_versions);
+    }
+
+    #[test]
+    fn merge_pmt_versions_is_refused_on_an_output() {
+        let error =
+            parse(&["-i", "in.ts", "-merge_pmt_versions", "1", "-f", "null", "-"]).unwrap_err();
+        assert!(error.render().contains("merge_pmt_versions"));
+        assert!(error.render().contains("input"));
     }
 
     #[test]

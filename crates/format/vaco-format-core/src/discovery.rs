@@ -266,6 +266,14 @@ impl<D: Demuxer> Discovery<D> {
         self.flags
     }
 
+    fn refresh_stream_snapshot(&mut self) {
+        self.streams = self.inner.streams().to_vec();
+        let n = self.streams.len();
+        self.state = vec![StreamState::default(); n];
+        self.parsers = (0..n).map(|_| None).collect();
+        self.fixer = TimestampFixer::for_streams(&self.streams, self.flags, &self.opts);
+    }
+
     /// Read the bounded prefix and refine what it allows.
     ///
     /// Every packet read is buffered and replayed, so running this is
@@ -287,9 +295,11 @@ impl<D: Demuxer> Discovery<D> {
         // `Demuxer::reconfigure` is the seam that reaches an already-constructed
         // demuxer instead; calling it here means wrapping a demuxer in
         // `Discovery` is enough to hand over the real budget and option set
-        // before anything is read through this wrapper. A demuxer that
-        // predates the method simply ignores the call.
+        // before anything is read through this wrapper. A demuxer may rebuild
+        // an eager header here, so refresh our pre-run snapshot immediately
+        // afterwards rather than parsing packets against its old stream list.
         self.inner.reconfigure(&self.limits, &self.opts)?;
+        self.refresh_stream_snapshot();
         let mut guard = ProgressGuard::new();
         let packet_cap = u64::try_from(self.opts.max_probe_packets)
             .unwrap_or(u64::MAX)
@@ -995,11 +1005,10 @@ impl<D: Demuxer> Demuxer for Discovery<D> {
     /// a second time, after construction, would otherwise silently hit this
     /// trait's no-op default instead of reaching `D` at all.
     ///
-    /// Safe to forward as a plain pass-through: no demuxer in this workspace
-    /// overrides `reconfigure` today (checked directly), so there is nothing
-    /// yet that could change stream-derived state out from under
-    /// `Discovery`'s own `self.streams` snapshot the way `bind_url` below
-    /// can.
+    /// [`Discovery::run`] refreshes its pre-read stream snapshot immediately
+    /// after its own reconfigure call. A later caller-driven reconfigure is
+    /// still forwarded unchanged: packets may already be queued, so replacing
+    /// that snapshot at this point would mislabel them.
     fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
         self.inner.reconfigure(limits, opts)
     }

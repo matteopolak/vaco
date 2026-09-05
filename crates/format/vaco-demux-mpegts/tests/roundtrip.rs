@@ -24,7 +24,7 @@
     reason = "test code"
 )]
 
-use vaco_core::{Error, Timestamp};
+use vaco_core::{Error, MediaType, Timestamp};
 use vaco_demux_mpegts::MpegTsDemuxer;
 use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::seek::{SeekFlags, SeekTarget};
@@ -1117,6 +1117,183 @@ fn a_pmt_version_bump_is_counted_once_and_picks_up_the_new_pid() {
         d.stats().pmt_updates,
         1,
         "one genuine version change, not one per repeated section"
+    );
+}
+
+fn pmt_pid_change_file() -> Vec<u8> {
+    pmt_pid_change_file_with_type(0x1B)
+}
+
+fn pmt_pid_change_file_with_type(replacement_type: u8) -> Vec<u8> {
+    let mut w = TsWriter::new();
+    w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+    w.section(
+        PMT_PID,
+        &pmt(1, 0, VIDEO_PID, &[(0x1B, VIDEO_PID, Vec::new())]),
+    );
+    w.pes(
+        VIDEO_PID,
+        0xE0,
+        Some(90_000),
+        Some(90_000),
+        &[0u8; 40],
+        true,
+        true,
+    );
+    w.section(
+        PMT_PID,
+        &pmt(
+            1,
+            1,
+            AUDIO_PID,
+            &[(replacement_type, AUDIO_PID, Vec::new())],
+        ),
+    );
+    w.pes(
+        AUDIO_PID,
+        0xE0,
+        Some(93_600),
+        Some(93_600),
+        &[1u8; 40],
+        true,
+        true,
+    );
+    w.out
+}
+
+#[test]
+fn a_pmt_pid_change_creates_a_new_stream_by_default() {
+    let mut d = open(pmt_pid_change_file());
+    let _ = drain(&mut d);
+    assert_eq!(
+        d.streams()
+            .iter()
+            .map(|stream| stream.id)
+            .collect::<Vec<_>>(),
+        vec![Some(i64::from(VIDEO_PID)), Some(i64::from(AUDIO_PID))]
+    );
+    assert_eq!(d.stats().pmt_updates, 1);
+}
+
+#[test]
+fn merge_pmt_versions_reuses_the_original_stream_across_a_pid_change() {
+    let mut opts = FormatOptions {
+        merge_pmt_versions: true,
+        ..FormatOptions::default()
+    };
+    let mut d = MpegTsDemuxer::open(
+        Box::new(MemorySource::new(pmt_pid_change_file())),
+        &NoParsers,
+        &opts,
+    )
+    .unwrap();
+    let packets = drain(&mut d);
+    assert_eq!(d.streams().len(), 1);
+    assert_eq!(d.streams()[0].id, Some(i64::from(VIDEO_PID)));
+    assert!(packets.iter().all(|packet| packet.stream_index == 0));
+
+    opts.merge_pmt_versions = false;
+    d.reconfigure(&Limits::permissive(), &opts).unwrap();
+    assert_eq!(
+        d.streams()
+            .iter()
+            .map(|stream| stream.id)
+            .collect::<Vec<_>>(),
+        vec![Some(i64::from(VIDEO_PID)), Some(i64::from(AUDIO_PID))],
+        "reconfigure must rebuild the eager header under the selected PMT policy"
+    );
+}
+
+#[test]
+fn merge_pmt_versions_preserves_the_original_stream_parameters() {
+    let opts = FormatOptions {
+        merge_pmt_versions: true,
+        ..FormatOptions::default()
+    };
+    let mut d = MpegTsDemuxer::open(
+        Box::new(MemorySource::new(pmt_pid_change_file_with_type(0x0F))),
+        &NoParsers,
+        &opts,
+    )
+    .unwrap();
+    let _ = drain(&mut d);
+    assert_eq!(d.streams().len(), 1);
+    assert_eq!(d.streams()[0].id, Some(i64::from(VIDEO_PID)));
+    assert_eq!(d.streams()[0].media_type(), Some(MediaType::Video));
+}
+
+#[test]
+fn merge_pmt_versions_keeps_pmt_entry_positions_across_skipped_pids() {
+    let mut w = TsWriter::new();
+    w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+    w.section(
+        PMT_PID,
+        &pmt(
+            1,
+            0,
+            VIDEO_PID,
+            &[(0x1B, 0x1FFF, Vec::new()), (0x1B, VIDEO_PID, Vec::new())],
+        ),
+    );
+    w.pes(
+        VIDEO_PID,
+        0xE0,
+        Some(90_000),
+        Some(90_000),
+        &[0u8; 40],
+        true,
+        true,
+    );
+    w.section(
+        PMT_PID,
+        &pmt(
+            1,
+            1,
+            AUDIO_PID,
+            &[(0x1B, 0x1FFF, Vec::new()), (0x1B, AUDIO_PID, Vec::new())],
+        ),
+    );
+    w.pes(
+        AUDIO_PID,
+        0xE0,
+        Some(93_600),
+        Some(93_600),
+        &[1u8; 40],
+        true,
+        true,
+    );
+
+    let opts = FormatOptions {
+        merge_pmt_versions: true,
+        ..FormatOptions::default()
+    };
+    let mut d = MpegTsDemuxer::open(Box::new(MemorySource::new(w.out)), &NoParsers, &opts).unwrap();
+    let packets = drain(&mut d);
+    assert_eq!(d.streams().len(), 1);
+    assert_eq!(d.streams()[0].id, Some(i64::from(VIDEO_PID)));
+    assert!(packets.iter().all(|packet| packet.stream_index == 0));
+}
+
+#[test]
+fn discovery_refreshes_its_stream_snapshot_after_mpegts_reconfiguration() {
+    use vaco_format_core::discovery::Discovery;
+
+    let opts = FormatOptions {
+        merge_pmt_versions: true,
+        ..FormatOptions::default()
+    };
+    let d = open(pmt_pid_change_file());
+    assert_eq!(
+        d.streams().len(),
+        2,
+        "descriptor opens with the default policy"
+    );
+    let mut discovery = Discovery::new(d, vaco_demux_mpegts::FLAGS, &opts);
+    discovery.run(&NoParsers).unwrap();
+    assert_eq!(
+        discovery.streams().len(),
+        1,
+        "the CLI path must expose the policy-selected stream list, not the pre-reconfigure snapshot"
     );
 }
 

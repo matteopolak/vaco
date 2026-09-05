@@ -202,13 +202,6 @@ pub struct DemuxStats {
     /// PES packets abandoned for exceeding [`MAX_PES_BYTES`].
     pub oversized_pes: u64,
     /// A program's PMT `version_number` changed from what was last applied.
-    ///
-    /// Counted, not acted on: `merge_pmt_versions` — creating a new stream set
-    /// rather than folding new PIDs into the existing one, which is the
-    /// reference's default behaviour — needs the PID-to-many-streams mapping
-    /// this crate does not have (see the docs file). A caller can at least see
-    /// that a splice happened, which today it cannot otherwise tell from a
-    /// stream list that never shrinks.
     pub pmt_updates: u64,
 }
 
@@ -250,6 +243,13 @@ pub struct MpegTsDemuxer {
     /// "already seen" version behind that makes the real read's first PMT
     /// look like a change it is not.
     pmt_counted_version: Vec<Option<u8>>,
+    /// Stream index per PMT elementary-stream entry, parallel to `programs`.
+    ///
+    /// PMT version changes may move a stream onto a new PID. In
+    /// `merge_pmt_versions` mode the next PMT entry at the same position maps
+    /// to this original stream, while both old and new PID assemblers emit
+    /// packets into it.
+    pmt_active_streams: Vec<Vec<Option<u32>>>,
     transport_stream_id: Option<u16>,
 }
 
@@ -312,6 +312,7 @@ impl MpegTsDemuxer {
             pmt_pids: Vec::new(),
             program_clocks: Vec::new(),
             pmt_counted_version: Vec::new(),
+            pmt_active_streams: Vec::new(),
             transport_stream_id: None,
         };
         me.detect_stride()?;
@@ -529,32 +530,61 @@ impl MpegTsDemuxer {
         }
 
         let cap = usize::try_from(self.opts.max_streams).unwrap_or(usize::MAX);
-        for entry in pmt.streams() {
+        let previous = self
+            .pmt_active_streams
+            .get(prog)
+            .cloned()
+            .unwrap_or_default();
+        let mut active = Vec::new();
+        for (slot, entry) in pmt.streams().enumerate() {
             if entry.elementary_pid > MAX_PID || entry.elementary_pid == NULL_PID {
+                active.push(None);
                 continue;
             }
             if let Some(existing) = self.es_index(entry.elementary_pid) {
-                // A PID already carrying a stream keeps it. Reassigning here
-                // is what `merge_pmt_versions` is for and it is not
-                // implemented; see the docs file.
-                if let Some(e) = self.es.get(existing)
-                    && let Some(p) = self.programs.get_mut(prog)
-                    && !p.stream_indices.contains(&e.stream_index)
-                {
-                    p.stream_indices.push(e.stream_index);
-                }
+                let Some(stream_index) = self.es.get(existing).map(|es| es.stream_index) else {
+                    continue;
+                };
+                self.assign_stream_to_program(prog, stream_index);
+                active.push(Some(stream_index));
                 continue;
             }
-            if self.streams.len() >= cap {
-                break;
-            }
-            self.add_stream(
-                entry.stream_type,
-                entry.elementary_pid,
-                entry.descriptors,
-                prog,
-                clock,
-            );
+            let stream_index = if self.opts.merge_pmt_versions {
+                if let Some(Some(stream_index)) = previous.get(slot) {
+                    let stream_index = *stream_index;
+                    self.add_es_pid(entry.elementary_pid, stream_index, clock);
+                    self.assign_stream_to_program(prog, stream_index);
+                    stream_index
+                } else {
+                    if self.streams.len() >= cap {
+                        active.push(None);
+                        continue;
+                    }
+                    self.add_stream(
+                        entry.stream_type,
+                        entry.elementary_pid,
+                        entry.descriptors,
+                        prog,
+                        clock,
+                    )
+                }
+            } else {
+                if self.streams.len() >= cap {
+                    active.push(None);
+                    continue;
+                }
+                self.add_stream(
+                    entry.stream_type,
+                    entry.elementary_pid,
+                    entry.descriptors,
+                    prog,
+                    clock,
+                )
+            };
+            active.push(Some(stream_index));
+        }
+        if let Some(current) = self.pmt_active_streams.get_mut(prog) {
+            *current = active;
         }
     }
 
@@ -565,7 +595,7 @@ impl MpegTsDemuxer {
         descriptors: &[u8],
         program: usize,
         clock: usize,
-    ) {
+    ) -> u32 {
         let resolved = resolve(stream_type, descriptors);
         let index = self.streams.len() as u32;
         let media = resolved.codec.media_type();
@@ -618,9 +648,15 @@ impl MpegTsDemuxer {
         apply_descriptors(&mut stream, descriptors);
         self.streams.push(stream);
         self.scan.push(ScanState::default());
+        self.add_es_pid(pid, index, clock);
+        self.assign_stream_to_program(program, index);
+        index
+    }
+
+    fn add_es_pid(&mut self, pid: u16, stream_index: u32, clock: usize) {
         self.es.push(EsPid {
             pid,
-            stream_index: index,
+            stream_index,
             clock,
             buf: Vec::new(),
             total: None,
@@ -632,8 +668,13 @@ impl MpegTsDemuxer {
             discontinuity: false,
             held: Vec::new(),
         });
-        if let Some(p) = self.programs.get_mut(program) {
-            p.stream_indices.push(index);
+    }
+
+    fn assign_stream_to_program(&mut self, program: usize, stream_index: u32) {
+        if let Some(p) = self.programs.get_mut(program)
+            && !p.stream_indices.contains(&stream_index)
+        {
+            p.stream_indices.push(stream_index);
         }
     }
 
@@ -670,6 +711,7 @@ impl MpegTsDemuxer {
         let clock = self.clocks.len().saturating_sub(1);
         self.program_clocks.push(clock);
         self.pmt_counted_version.push(None);
+        self.pmt_active_streams.push(Vec::new());
         (self.programs.len().saturating_sub(1), clock)
     }
 
@@ -1947,6 +1989,40 @@ impl Demuxer for MpegTsDemuxer {
 
     fn duration_exact(&self) -> Option<ExactDuration> {
         self.duration_exact
+    }
+
+    fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
+        // `DemuxerDesc::open` has no options or limits parameter, so its
+        // first eager header pass necessarily used defaults. Replay that pass
+        // from the detected packet boundary under the caller's actual policy
+        // before `Discovery` refreshes its stream snapshot.
+        self.io.seek(self.first_packet)?;
+        self.opts = opts.clone();
+        self.streams.clear();
+        self.programs.clear();
+        self.metadata.clear();
+        self.psi.clear();
+        self.es.clear();
+        self.clocks.clear();
+        self.queue.clear();
+        self.budget = Budget::new(limits.clone());
+        self.index = PacketIndex::with_options(opts);
+        self.scan.clear();
+        self.duration = None;
+        self.duration_exact = None;
+        self.stats = DemuxStats::default();
+        self.eof = false;
+        self.scanning = false;
+        self.pmt_pids.clear();
+        self.program_clocks.clear();
+        self.pmt_counted_version.clear();
+        self.pmt_active_streams.clear();
+        self.transport_stream_id = None;
+        self.psi.push(PsiPid::new(PAT_PID, PsiKind::Pat));
+        self.psi.push(PsiPid::new(CAT_PID, PsiKind::Cat));
+        self.psi.push(PsiPid::new(SDT_PID, PsiKind::Sdt));
+        self.clocks.push(ProgramClock::new(opts));
+        self.read_header()
     }
 }
 
