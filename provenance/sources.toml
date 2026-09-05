@@ -1542,6 +1542,27 @@ acquired = "2026-09-04"
 where    = "the reference binaries installed on the development machine"
 
 [[source]]
+id       = "fmod-fsb4-format"
+kind     = "spec"
+title    = "Xentax FMOD Soundbank format note: FSB4 48-byte header, 80-byte directory entry, little-endian lengths, sample geometry, and data concatenation"
+acquired = "2026-09-05"
+where    = "https://wiki.xentax.spektr.name/index.php/FMOD_Audio_FSB"
+
+[[source]]
+id       = "python-fsb5-layout"
+kind     = "original"
+title    = "HearthSim python-fsb5 MIT-licensed reader and binary-template documentation: FSB5 compact header, packed sample fields, optional metadata chunks, name table, and 16-byte data offsets"
+acquired = "2026-09-05"
+where    = "https://github.com/HearthSim/python-fsb5"
+
+[[source]]
+id       = "vaco-format-misc-audio-fsb-fixtures-probe"
+kind     = "blackbox"
+title    = "ffprobe 9.0.1 black-box measurements on hand-built FSB4 THP and FSB5 fixtures: FSB4 reports a stereo stream at 44100 Hz and 16-byte packets with 14-sample durations; FSB5 is recognized by signature but the installed reference declines the format"
+acquired = "2026-09-05"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
 id       = "kaitai-fasttracker-xm"
 kind     = "spec"
 title    = "Kaitai Struct FastTracker 2 Extended Module (XM) declarative format description; published under the Unlicense; pinned repository commit f6a82f70fa9ca8cbd3f7f4b39b2cc215668f0fb4; captured KSY SHA-256 3997da4f6aab2d3d7e8458569ee0361f42c40b37296f797eb803d5a0ced8f837"

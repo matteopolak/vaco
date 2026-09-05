@@ -159,7 +159,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `framehash` |  | `vaco-mux-hash` |  |
 | `framemd5` |  | `vaco-mux-hash` |  |
 | `frm` | — |  | not yet |
-| `fsb` | — |  | not yet |
+| `fsb` | `vaco-format-misc-audio` |  | bounded FSB4 Nintendo THP and FSB5 PCM8/PCM16/PCM32/MPEG/Vorbis |
 | `fwse` | — |  | not yet |
 | `g722` | `vaco-format-misc-audio` | — | not yet |
 | `g723_1` | `vaco-format-misc-audio` | — | not yet |

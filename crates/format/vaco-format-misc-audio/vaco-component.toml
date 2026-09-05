@@ -238,3 +238,11 @@ long_name  = "ProTracker Module"
 feature    = "demux-mod"
 ctor       = "vaco_format_misc_audio::protracker::DEMUXER"
 extensions = "mod"
+
+[[component]]
+kind       = "demuxer"
+name       = "fsb"
+long_name  = "FMOD Sample Bank"
+feature    = "demux-fsb"
+ctor       = "vaco_format_misc_audio::fsb::DEMUXER"
+extensions = "fsb"

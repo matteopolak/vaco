@@ -12,6 +12,7 @@ pub mod amr;
 pub mod bfstm;
 pub mod block;
 pub mod brstm;
+pub mod fsb;
 pub mod g723;
 pub mod nistsphere;
 pub mod pvf;

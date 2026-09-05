@@ -5,8 +5,8 @@ Layer 4. Demux-only: `wv`, `tta`, `amr`/`amrnb`/`amrwb`, `adx`,
 speech-codec tail (`gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`,
 `g729`, `aptx`, `aptx_hd`), and — added across two later passes at #620's
 chiptune-adjacent game-audio containers — `vag`, `svag`, `xwma`, `xa`, and
-bounded `bfstm`/`brstm` subsets, plus bounded XM and ProTracker MOD
-structural readers. Twenty-nine registered demuxers in one crate (FM-58).
+bounded `bfstm`/`brstm` subsets, plus bounded XM, ProTracker MOD, and FSB4/FSB5
+structural readers. Thirty registered demuxers in one crate (FM-58).
 These are
 containers: the job is finding frame/block boundaries and reporting stream
 parameters, not decoding audio.
@@ -33,6 +33,7 @@ parameters, not decoding audio.
 | `xwma` | `xwma` | RIFF container (`fmt `/`dpds`/`data` chunks); packets are `nBlockAlign`-aligned reads of `data`, not the `dpds` table's declared split — see below |
 | `xm` | `xm` | FastTracker 2 v1.04 little-endian module header, pattern blocks, instrument/sample headers, and one packet per non-empty sample payload; structural only — no tracker playback or sample decoding |
 | `protracker` | `mod` | ProTracker four-channel `M.K.` header, order table, fixed 64-row pattern blocks, and one packet per non-empty signed 8-bit sample payload; structural only |
+| `fsb` | `fsb` | FMOD FSB4/FSB5 sample-bank headers and bounded sample entries; one stream per entry and stored payload packets, with FSB4 limited to measured Nintendo THP and FSB5 to PCM8/PCM16/PCM32/MPEG/Vorbis |
 | `xa` | `xa` | fixed 24-byte header (2-byte `"XA"` magic, little-endian `WAVEFORMATEX` tail), then EA-ADPCM blocks (`15`/`30` bytes mono/stereo, `28` samples each); packet count is `ceil(dwOutSize / block_bytes)` clamped to the blocks on disk, but `duration`/`duration_ts` ignore `dwOutSize` and reflect the file's own full block count instead — a real, measured disagreement in the reference itself, reproduced rather than "corrected" — see `xa.rs`'s module doc |
 | `block` | shared | `BlockDemuxer` — the fixed-ratio block engine `adx`, `nistsphere`, `pvf` and every `rawcodec` entry reduce to |
 
@@ -69,7 +70,7 @@ decode tracker sample data. Tracker playback and the remaining tracker formats
 `libopenmpt`) remain excluded — see
 `docs/why-some-formats-are-not-included.md`. Of the twelve chiptune-adjacent
 game-audio containers, `vag` and `xwma` landed in an earlier pass, followed by
-`xa`, `svag`, and bounded `brstm`/`bfstm` subsets; six remain, each for a specific, recorded
+`xa`, `svag`, bounded `brstm`/`bfstm` subsets, and FSB4/FSB5; five remain, each for a specific, recorded
 reason:
 
 - `binka` (raw Bink Audio) and `genh` (a generic fixed-struct header) — the
@@ -87,11 +88,31 @@ reason:
   a subkey byte for AWB archives) but no independently-sourced byte-level
   chunk table (`fmt`/`comp`/`dec`/`vbr`/`ath`/`loop`/…) was found; not
   attempted.
-- `xvag`, `msf`, `fsb` — same family, same technique as `vag`/
+- `xvag`, `msf` — same family, same technique as `vag`/
   `xwma`/`xa` would likely apply, but not researched this pass either;
   the same "no independently reachable byte-level spec found yet" bar
   `binka`/`genh`/`hca` sit behind is the working assumption, not confirmed
   per-format.
+
+### `fsb` — bounded FMOD sample-bank demux
+
+The reader accepts FSB4's published 48-byte header and 80-byte directory
+entries only when the entry's measured Nintendo THP mode is present. It emits
+one 16-byte packet per stored THP block, with 14-sample packet durations, the
+same packet geometry reported by `ffprobe` 9.0.1 on the hand-built fixture.
+FSB5 follows the MIT-licensed `python-fsb5` compact header: each 64-bit sample
+header carries a frequency code, mono/stereo bit, 16-byte data offset, and
+sample count; optional metadata chunks can override frequency and channels.
+PCM8, PCM16, PCM32, MPEG, and Vorbis are indexed as one stream and one stored
+payload packet per sample. Names are intentionally not surfaced because the
+current stream model has no per-stream title slot.
+The committed `tests/fixtures/fsb4-thp.fsb` and `fsb5-pcm16.fsb` fixtures are
+opened through the public demux descriptor; the FSB4 fixture's 44100 Hz,
+stereo, 16-byte/14-sample packet geometry was checked with `ffprobe` 9.0.1.
+
+Encrypted FSB4 banks, FSB4 modes other than the measured THP mode, and FSB5
+PCM24/float/IMA/VAG/HEVAG/XMA/CELT/AT9/XWMA/FADPCM or unknown modes are named
+refusals. The reader never decodes or guesses a payload codec.
 
 ### `xm` — bounded FastTracker 2 structural demux
 
@@ -443,13 +464,10 @@ and the fixture is `128 * 37` bytes exactly.
   after an independent source establishes their layout and a real reference
   accepts the fixture; both current paths intentionally refuse beyond their
   measured stereo DSP-ADPCM subsets.
-- **The six still-unresearched game-audio containers** (`binka`, `genh`,
-  `hca`, `xvag`, `msf`, `fsb`): `fsb`
-  has the most promising independent documentation trail found so far
-  (`rewiki.miraheze.org`/Xentax's `FMOD Audio FSB` pages, plus two
-  open-source *readers* — not decoders — of the format whose licence and
-  independence from FFmpeg would need checking before treating them as a
-  spec source at all).
+- **The five still-unresearched game-audio containers** (`binka`, `genh`,
+  `hca`, `xvag`, `msf`): each remains gated on an independent byte-level
+  source and a reference-accepted fixture; the bounded FSB4/FSB5 subset is
+  documented above.
 - **`amr`'s multichannel interleaved variant** (`#!AMR_MC1.0\n` and
   friends): not implemented; only mono narrowband/wideband are.
 - **A `Limits` injection point for `open`**: as
