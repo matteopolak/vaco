@@ -8,9 +8,9 @@ use std::process::ExitCode;
 
 use vaco_bench::{
     BenchError, BenchmarkSandbox, ChildBatchMode, CommandTemplate, FilterBenchConfig,
-    Implementation, MacroScenario, MeasurementBackend, apply_baseline, filter_cases, regressions,
-    run_filter_child_batch, run_filter_suite, run_macro_scenario, verify_machine_control,
-    write_jsonl, write_report,
+    Implementation, MacroScenario, MeasurementBackend, apply_baseline, filter_cases,
+    macro_json_record, regressions, run_filter_child_batch, run_filter_suite, run_macro_scenario,
+    validate_macro_manifest, verify_machine_control, write_jsonl, write_report,
 };
 use vaco_corpus::fetch::{self, NetworkPolicy};
 use vaco_corpus::{ObjectId, Store, embedded_catalogue};
@@ -64,6 +64,7 @@ struct MacroArgs {
     vaco_args: Vec<String>,
     reference_args: Vec<String>,
     cache_dir: Option<PathBuf>,
+    json: Option<PathBuf>,
     rounds: usize,
 }
 
@@ -97,6 +98,7 @@ fn run_macro(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError>
             .expected_output
             .ok_or_else(|| CliError::Usage("--expected-output-sha256 is required".to_owned()))?,
     };
+    validate_macro_manifest(std::slice::from_ref(&scenario))?;
     let catalogue = embedded_catalogue();
     let entry = catalogue
         .find(&scenario.asset)
@@ -109,6 +111,15 @@ fn run_macro(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError>
     let input = sandbox.join("input.bin");
     fs::write(&input, bytes).map_err(BenchError::Io)?;
     let samples = run_macro_scenario(&scenario, &input, parsed.rounds, &sandbox)?;
+    if let Some(path) = parsed.json {
+        let mut rows = samples
+            .iter()
+            .map(macro_json_record)
+            .collect::<Vec<_>>()
+            .join("\n");
+        rows.push('\n');
+        fs::write(path, rows).map_err(BenchError::Io)?;
+    }
     for implementation in [Implementation::Vaco, Implementation::Reference] {
         let times: Vec<_> = samples
             .iter()
@@ -155,6 +166,7 @@ fn parse_macro_args(args: impl Iterator<Item = OsString>) -> Result<MacroArgs, C
                 .reference_args
                 .push(text_value(&mut args, "--reference-arg")?),
             Some("--cache-dir") => parsed.cache_dir = Some(path_value(&mut args, "--cache-dir")?),
+            Some("--json") => parsed.json = Some(path_value(&mut args, "--json")?),
             Some("--rounds") => {
                 parsed.rounds = usize_value(&mut args, "--rounds")?;
                 if parsed.rounds < 11 {
@@ -499,7 +511,7 @@ fn usage() -> &'static str {
 }
 
 fn macro_usage() -> &'static str {
-    "usage: vaco-bench macro --scenario ID --asset CORPUS_ENTRY --vaco PATH --reference PATH --expected-output-sha256 SHA256 [--vaco-arg ARG]... [--reference-arg ARG]... [--cache-dir DIR] [--rounds N]\n\nEach command must contain whole-argument {input} and {output} placeholders."
+    "usage: vaco-bench macro --scenario S1..S10/CONFIG --asset CORPUS_ENTRY --vaco PATH --reference PATH --expected-output-sha256 SHA256 [--vaco-arg ARG]... [--reference-arg ARG]... [--cache-dir DIR] [--json PATH] [--rounds N]\n\nEach command must contain whole-argument {input} and {output} placeholders."
 }
 
 fn filter_usage() -> &'static str {

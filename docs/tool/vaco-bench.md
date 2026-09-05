@@ -151,6 +151,21 @@ template because decode, encode, scale, resample, filters, seek, startup,
 memory, and thread-determinism scenarios need different CLI arguments but all
 share the same corpus, interleaving, and useful-output contract.
 
+Before execution, the host-independent manifest validator accepts only stable
+`S1` through `S10` configuration paths, unique scenario names, non-empty corpus
+assets, and exactly one whole `{input}` and `{output}` argument in each command.
+It deliberately does not declare command lines, assets, or digests for any
+scenario: those authoritative facts belong in the future reviewed scenario
+manifest, not in harness defaults.
+
+Every successful child is launched through the platform resource wrapper. macOS
+uses `/usr/bin/time -l`; Linux uses `/usr/bin/time -v`. Both attach child CPU
+seconds and peak RSS, and the runner captures the complete `-version` output
+plus the fully expanded argument vector. `--json` writes one stable JSONL row
+per child with that provenance and the round's wall time. This context is useful
+for diagnostics, but the controlled-Linux preflight and PMU evidence are still
+required before a macro result can become a regression baseline.
+
 ```sh
 # Both commands must use {input} and {output} as whole arguments. Set
 # VACO_CORPUS_NETWORK=1 only when a cache miss may fetch the locked asset.
@@ -158,7 +173,7 @@ vaco-bench macro --scenario S1/vp9/1080p/t1 \
   --asset vp9-size-10x10 --vaco /opt/vaco/vvmpeg --reference ffmpeg \
   --vaco-arg -i --vaco-arg '{input}' --vaco-arg -f --vaco-arg framemd5 --vaco-arg '{output}' \
   --reference-arg -i --reference-arg '{input}' --reference-arg -f --reference-arg framemd5 --reference-arg '{output}' \
-  --expected-output-sha256 '<known-framemd5-sha256>' --rounds 11
+  --expected-output-sha256 '<known-framemd5-sha256>' --json /private/tmp/vaco-macro.jsonl --rounds 11
 ```
 
 ## CI result tracking
@@ -214,8 +229,10 @@ missing hardware control into a passing result.
 
 `macro` requires `--scenario`, `--asset`, `--vaco`, `--reference`, and
 `--expected-output-sha256`. Repeat `--vaco-arg` and `--reference-arg` to build
-each command line. `--cache-dir` selects a corpus object-store root and
-`--rounds` defaults to 11; lower values are rejected.
+each command line. Scenario IDs are `S1` through `S10` plus a non-empty
+configuration path; the command does not invent scenario definitions. `--cache-dir`
+selects a corpus object-store root, `--json` selects a per-child JSONL result
+path, and `--rounds` defaults to 11; lower values are rejected.
 
 `report` accepts `--input`, `--output`, optional `--generated-unix-ms`, and
 `--fail-under` (default `0.95`). Its input is combined schema-1 filter JSONL;

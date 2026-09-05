@@ -9,12 +9,17 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::time::Instant;
 
 use vaco_corpus::ObjectId;
 
-use crate::BenchError;
+#[cfg(target_os = "linux")]
+use crate::parse_gnu_time_v;
+#[cfg(target_os = "macos")]
+use crate::parse_macos_time_l;
+use crate::resource::json_string;
+use crate::{BenchError, CommandProvenance, ResourceObservation};
 
 /// The two implementations measured for a macro scenario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +75,66 @@ pub struct MacroSample {
     pub round: usize,
     /// Monotonic wall time for the child process.
     pub wall_ns: f64,
+    /// CPU time and maximum resident memory observed for this child.
+    pub resources: ResourceObservation,
+    /// Exact command and version/configuration record for this child.
+    pub provenance: CommandProvenance,
+}
+
+/// Render one stable, self-contained JSONL row for a macro child execution.
+#[must_use]
+pub fn macro_json_record(sample: &MacroSample) -> String {
+    let argv = sample
+        .provenance
+        .argv
+        .iter()
+        .map(|argument| json_string(argument))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"schema\":1,\"suite\":\"macro\",\"scenario\":{},\"implementation\":{},\"round\":{},\"wall_ns\":{},\"cpu_seconds\":{},\"peak_rss_bytes\":{},\"argv\":[{}],\"version\":{}}}",
+        json_string(&sample.scenario),
+        json_string(sample.implementation.name()),
+        sample.round,
+        sample.wall_ns,
+        sample.resources.cpu_seconds,
+        sample.resources.peak_rss_bytes,
+        argv,
+        json_string(&sample.provenance.version),
+    )
+}
+
+/// Validate host-independent properties of an authoritative macro manifest.
+///
+/// This deliberately validates only structure. The project has not yet
+/// published the authoritative S1--S10 assets, command lines, or output
+/// digests, so this function cannot manufacture those facts.
+///
+/// # Errors
+///
+/// Returns an error for duplicate IDs, unsupported S-series IDs, empty fields,
+/// or templates that do not use exactly one whole `{input}` and `{output}`
+/// argument.
+pub fn validate_macro_manifest(scenarios: &[MacroScenario]) -> Result<(), BenchError> {
+    let mut names = std::collections::BTreeSet::new();
+    for scenario in scenarios {
+        if !names.insert(&scenario.name) {
+            return Err(BenchError::Macro(format!(
+                "macro manifest repeats scenario {:?}",
+                scenario.name
+            )));
+        }
+        validate_scenario_id(&scenario.name)?;
+        if scenario.asset.trim().is_empty() {
+            return Err(BenchError::Macro(format!(
+                "{} has an empty corpus asset",
+                scenario.name
+            )));
+        }
+        validate_template(&scenario.name, "vaco", &scenario.vaco)?;
+        validate_template(&scenario.name, "reference", &scenario.reference)?;
+    }
+    Ok(())
 }
 
 /// Execute at least eleven alternating Vaco/reference repetitions.
@@ -89,6 +154,19 @@ pub fn run_macro_scenario(
     rounds: usize,
     sandbox: &Path,
 ) -> Result<Vec<MacroSample>, BenchError> {
+    run_macro_scenario_with_launcher(scenario, input, rounds, sandbox, launch_with_resources)
+}
+
+fn run_macro_scenario_with_launcher<F>(
+    scenario: &MacroScenario,
+    input: &Path,
+    rounds: usize,
+    sandbox: &Path,
+    launcher: F,
+) -> Result<Vec<MacroSample>, BenchError>
+where
+    F: Fn(&[String], &Path) -> Result<(Output, ResourceObservation), BenchError>,
+{
     if rounds < 11 {
         return Err(BenchError::Macro(
             "macro benchmarks require at least 11 interleaved rounds".to_owned(),
@@ -101,6 +179,9 @@ pub fn run_macro_scenario(
             input.display()
         )));
     }
+    validate_macro_manifest(std::slice::from_ref(scenario))?;
+    let vaco_version = capture_version(&scenario.vaco)?;
+    let reference_version = capture_version(&scenario.reference)?;
     let mut samples = Vec::new();
     for round in 0..rounds {
         let order = if round % 2 == 0 {
@@ -114,41 +195,53 @@ pub fn run_macro_scenario(
                 Implementation::Vaco => &scenario.vaco,
                 Implementation::Reference => &scenario.reference,
             };
-            let wall_ns = run_template(template, input, &output, &scenario.expected_output)?;
+            let version = match implementation {
+                Implementation::Vaco => &vaco_version,
+                Implementation::Reference => &reference_version,
+            };
+            let (wall_ns, resources, argv) = run_template(
+                template,
+                input,
+                &output,
+                &scenario.expected_output,
+                &launcher,
+            )?;
             samples.push(MacroSample {
                 scenario: scenario.name.clone(),
                 implementation,
                 round,
                 wall_ns,
+                resources,
+                provenance: CommandProvenance {
+                    argv,
+                    version: version.clone(),
+                },
             });
         }
     }
     Ok(samples)
 }
 
-fn run_template(
+fn run_template<F>(
     template: &CommandTemplate,
     input: &Path,
     output: &Path,
     expected: &ObjectId,
-) -> Result<f64, BenchError> {
+    launcher: &F,
+) -> Result<(f64, ResourceObservation, Vec<String>), BenchError>
+where
+    F: Fn(&[String], &Path) -> Result<(Output, ResourceObservation), BenchError>,
+{
     let _ = fs::remove_file(output);
-    let mut command = Command::new(&template.program);
-    for argument in &template.args {
-        let value = match argument.as_str() {
-            "{input}" => input.as_os_str().to_string_lossy().into_owned(),
-            "{output}" => output.as_os_str().to_string_lossy().into_owned(),
-            _ => argument.clone(),
-        };
-        command.arg(value);
-    }
+    let argv = template.expand(input, output)?;
     let start = Instant::now();
-    let status = command.status().map_err(BenchError::Io)?;
+    let (child, resources) = launcher(&argv, output)?;
     let elapsed = start.elapsed().as_secs_f64() * 1_000_000_000.0;
-    if !status.success() {
+    if !child.status.success() {
         return Err(BenchError::Macro(format!(
-            "{} exited with {status}",
-            template.program.display()
+            "{} exited with {}",
+            template.program.display(),
+            child.status
         )));
     }
     let bytes = fs::read(output).map_err(|error| {
@@ -165,7 +258,176 @@ fn run_template(
             template.program.display()
         )));
     }
-    Ok(elapsed)
+    Ok((elapsed, resources, argv))
+}
+
+impl CommandTemplate {
+    fn expand(&self, input: &Path, output: &Path) -> Result<Vec<String>, BenchError> {
+        let program = self.program.to_str().ok_or_else(|| {
+            BenchError::Macro(format!(
+                "{} is not valid UTF-8 and cannot be recorded exactly",
+                self.program.display()
+            ))
+        })?;
+        let input = input.to_str().ok_or_else(|| {
+            BenchError::Macro(format!(
+                "{} is not valid UTF-8 and cannot be recorded exactly",
+                input.display()
+            ))
+        })?;
+        let output = output.to_str().ok_or_else(|| {
+            BenchError::Macro(format!(
+                "{} is not valid UTF-8 and cannot be recorded exactly",
+                output.display()
+            ))
+        })?;
+        let mut argv = vec![program.to_owned()];
+        argv.extend(self.args.iter().map(|argument| match argument.as_str() {
+            "{input}" => input.to_owned(),
+            "{output}" => output.to_owned(),
+            _ => argument.clone(),
+        }));
+        Ok(argv)
+    }
+}
+
+fn validate_scenario_id(name: &str) -> Result<(), BenchError> {
+    let Some((series, configuration)) = name.split_once('/') else {
+        return Err(BenchError::Macro(format!(
+            "macro scenario {name:?} must be S1 through S10 plus a configuration ID"
+        )));
+    };
+    let Some(number) = series
+        .strip_prefix('S')
+        .and_then(|value| value.parse::<u8>().ok())
+    else {
+        return Err(BenchError::Macro(format!(
+            "macro scenario {name:?} must begin with S1 through S10"
+        )));
+    };
+    if !(1..=10).contains(&number)
+        || configuration
+            .split('/')
+            .any(|component| component.trim().is_empty())
+    {
+        return Err(BenchError::Macro(format!(
+            "macro scenario {name:?} must be S1 through S10 plus a non-empty configuration ID"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_template(
+    scenario: &str,
+    implementation: &str,
+    template: &CommandTemplate,
+) -> Result<(), BenchError> {
+    if template.program.as_os_str().is_empty() {
+        return Err(BenchError::Macro(format!(
+            "{scenario} {implementation} command has no program"
+        )));
+    }
+    for placeholder in ["{input}", "{output}"] {
+        let whole = template
+            .args
+            .iter()
+            .filter(|argument| argument.as_str() == placeholder)
+            .count();
+        let embedded = template
+            .args
+            .iter()
+            .any(|argument| argument.contains(placeholder) && argument.as_str() != placeholder);
+        if whole != 1 || embedded {
+            return Err(BenchError::Macro(format!(
+                "{scenario} {implementation} command must contain exactly one whole {placeholder} argument"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn capture_version(template: &CommandTemplate) -> Result<String, BenchError> {
+    let program = template.program.to_str().ok_or_else(|| {
+        BenchError::Macro(format!(
+            "{} is not valid UTF-8 and cannot be recorded exactly",
+            template.program.display()
+        ))
+    })?;
+    let version = Command::new(&template.program)
+        .arg("-version")
+        .output()
+        .map_err(BenchError::Io)?;
+    if !version.status.success() {
+        return Err(BenchError::Macro(format!(
+            "{program} -version exited {}",
+            version.status
+        )));
+    }
+    let record = if version.stdout.is_empty() {
+        version.stderr
+    } else {
+        version.stdout
+    };
+    let version = String::from_utf8(record).map_err(|_| {
+        BenchError::Macro(format!(
+            "{program} -version did not produce UTF-8 provenance"
+        ))
+    })?;
+    if version.trim().is_empty() {
+        return Err(BenchError::Macro(format!(
+            "{program} -version produced no version/configuration provenance"
+        )));
+    }
+    Ok(version)
+}
+
+fn launch_with_resources(
+    argv: &[String],
+    _resource_output: &Path,
+) -> Result<(Output, ResourceObservation), BenchError> {
+    let Some((program, args)) = argv.split_first() else {
+        return Err(BenchError::Macro("empty macro command".to_owned()));
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let child = Command::new("/usr/bin/time")
+            .arg("-l")
+            .arg(program)
+            .args(args)
+            .output()
+            .map_err(BenchError::Io)?;
+        let diagnostics = String::from_utf8_lossy(&child.stderr);
+        let resources = parse_macos_time_l(&diagnostics).map_err(BenchError::Macro)?;
+        Ok((child, resources))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let time_output = _resource_output.with_extension("time");
+        let _ = fs::remove_file(&time_output);
+        let child = Command::new("/usr/bin/time")
+            .args(["-v", "-o"])
+            .arg(&time_output)
+            .arg(program)
+            .args(args)
+            .output()
+            .map_err(BenchError::Io)?;
+        let text = fs::read_to_string(&time_output).map_err(|error| {
+            BenchError::Macro(format!(
+                "resource wrapper did not write {}: {error}",
+                time_output.display()
+            ))
+        })?;
+        fs::remove_file(&time_output).map_err(BenchError::Io)?;
+        let resources = parse_gnu_time_v(&text).map_err(BenchError::Macro)?;
+        Ok((child, resources))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (program, args, _resource_output);
+        Err(BenchError::Macro(
+            "macro resource wrapper requires macOS or Linux".to_owned(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -174,9 +436,14 @@ fn run_template(
     reason = "test fixture setup uses direct diagnostics"
 )]
 mod tests {
-    use super::{CommandTemplate, Implementation, MacroScenario, run_macro_scenario};
+    use super::{
+        CommandTemplate, Implementation, MacroScenario, macro_json_record, run_macro_scenario,
+        run_macro_scenario_with_launcher, validate_macro_manifest,
+    };
+    use crate::{BenchError, ResourceObservation};
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
     use vaco_corpus::ObjectId;
 
@@ -190,42 +457,65 @@ mod tests {
         directory
     }
 
-    fn scenario() -> MacroScenario {
-        let program = if cfg!(windows) { "cmd" } else { "sh" };
-        let args = if cfg!(windows) {
-            vec!["/C".to_owned(), "copy /Y {input} {output}".to_owned()]
-        } else {
-            vec![
-                "-c".to_owned(),
-                "cp \"$1\" \"$2\"".to_owned(),
-                "copy".to_owned(),
-                "{input}".to_owned(),
-                "{output}".to_owned(),
-            ]
-        };
+    #[cfg(unix)]
+    fn fixture_program(directory: &std::path::Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let program = directory.join("fixture-command");
+        fs::write(
+            &program,
+            "#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then\n  printf 'fixture version config=release\\n'\n  exit 0\nfi\ncp \"$1\" \"$2\"\n",
+        )
+        .expect("write fixture command");
+        let mut permissions = fs::metadata(&program)
+            .expect("read fixture command metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&program, permissions).expect("make fixture command executable");
+        program
+    }
+
+    #[cfg(unix)]
+    fn scenario(program: PathBuf) -> MacroScenario {
+        let args = vec!["{input}".to_owned(), "{output}".to_owned()];
         MacroScenario {
             name: "S10/test".to_owned(),
             asset: "fixture".to_owned(),
             vaco: CommandTemplate {
-                program: program.into(),
+                program: program.clone(),
                 args: args.clone(),
             },
-            reference: CommandTemplate {
-                program: program.into(),
-                args,
-            },
+            reference: CommandTemplate { program, args },
             expected_output: ObjectId::of(b"fixture bytes"),
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
-    fn alternates_order_and_checks_every_output() {
+    fn synthetic_controlled_runs_attach_provenance_and_alternate_order() {
         let directory = directory("alternating");
         let input = directory.join("input");
         fs::write(&input, b"fixture bytes").expect("write input");
+        let program = fixture_program(&directory);
+        let launcher = |argv: &[String], _: &std::path::Path| {
+            let (program, arguments) = argv
+                .split_first()
+                .ok_or_else(|| BenchError::Macro("fixture argv is empty".to_owned()))?;
+            let child = Command::new(program)
+                .args(arguments)
+                .output()
+                .map_err(BenchError::Io)?;
+            Ok((
+                child,
+                ResourceObservation {
+                    cpu_seconds: 0.125,
+                    peak_rss_bytes: 8192,
+                },
+            ))
+        };
         let samples =
-            run_macro_scenario(&scenario(), &input, 11, &directory).expect("run scenario");
+            run_macro_scenario_with_launcher(&scenario(program), &input, 11, &directory, launcher)
+                .expect("run scenario");
         assert_eq!(samples.len(), 22);
         let observed: Vec<_> = samples
             .iter()
@@ -241,17 +531,65 @@ mod tests {
                 Implementation::Vaco,
             ]
         );
+        assert!(
+            samples
+                .iter()
+                .all(|sample| (sample.resources.cpu_seconds - 0.125).abs() < f64::EPSILON)
+        );
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.resources.peak_rss_bytes == 8192)
+        );
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.provenance.argv.len() == 3)
+        );
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.provenance.version == "fixture version config=release\n")
+        );
+        let row = macro_json_record(samples.first().expect("one macro sample"));
+        assert!(row.contains("\"suite\":\"macro\""));
+        assert!(row.contains("\"peak_rss_bytes\":"));
+        assert!(row.contains("fixture version config=release\\n"));
         fs::remove_dir_all(directory).expect("remove fixture directory");
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_fewer_than_eleven_rounds() {
         let directory = directory("rounds");
         let input = directory.join("input");
         fs::write(&input, b"fixture bytes").expect("write input");
-        let error = run_macro_scenario(&scenario(), &input, 10, &directory)
-            .expect_err("round count must fail");
+        let error = run_macro_scenario(
+            &scenario(fixture_program(&directory)),
+            &input,
+            10,
+            &directory,
+        )
+        .expect_err("round count must fail");
         assert!(error.to_string().contains("at least 11"));
+        fs::remove_dir_all(directory).expect("remove fixture directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_validation_rejects_structure_without_scenario_facts() {
+        let directory = directory("manifest");
+        let manifest = scenario(fixture_program(&directory));
+        assert!(validate_macro_manifest(std::slice::from_ref(&manifest)).is_ok());
+        let duplicate = validate_macro_manifest(&[manifest.clone(), manifest.clone()])
+            .expect_err("duplicate scenario must fail");
+        assert!(duplicate.to_string().contains("repeats scenario"));
+        let mut malformed = manifest;
+        malformed.name = "S11/test".to_owned();
+        assert!(validate_macro_manifest(&[malformed]).is_err());
+        let mut embedded = scenario(fixture_program(&directory));
+        embedded.vaco.args = vec!["prefix-{input}".to_owned(), "{output}".to_owned()];
+        assert!(validate_macro_manifest(&[embedded]).is_err());
         fs::remove_dir_all(directory).expect("remove fixture directory");
     }
 }
