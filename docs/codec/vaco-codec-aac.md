@@ -33,20 +33,24 @@ unsupported.
 ### AAC-LC ADTS silence encode (#449)
 
 `AacLcSilenceEncoder` is the first encoding slice, deliberately kept smaller
-than a general AAC encoder: it accepts exactly one packed `S16`, mono, 48 kHz
-frame containing exactly 1024 zero samples. It emits one self-contained ADTS
-AAC-LC access unit with a single long-window `SCE`, one `ZERO_HCB` section, and
-`ID_END`. Non-silent PCM, another sample format, another layout/rate, or a
-short/long frame is refused by name instead of being encoded as silence.
+than a general AAC encoder: it accepts exactly one packed `S16`, mono or
+stereo, 48 kHz frame containing exactly 1024 zero samples per channel. Mono
+uses a single long-window `SCE`; stereo uses one `CPE` with `common_window = 0`
+and two such channel streams. Both use one `ZERO_HCB` section per channel and
+end with `ID_END`. Non-silent PCM, another sample format, another layout/rate,
+or a short/long frame is refused by name instead of being encoded as silence.
 
-The ADTS header uses AAC-LC profile, sampling-frequency index 3 (48 kHz), mono
-channel configuration, no CRC, and its exact access-unit length. Three emitted
-packets concatenated as an `.aac` elementary stream were read by `ffprobe
-9.0.1` as `codec_name=aac`, `sample_rate=48000`, and `channels=1`; `ffmpeg
-9.0.1` decoded exactly 3,072 samples / 12,288 `f32le` bytes. The crate's own
-decoder also reads each packet as one 1,024-sample mono frame. Silence has no
-lossy-quality claim to compare — these checks establish framing and stream
-shape, not general quantisation quality.
+The ADTS header uses AAC-LC profile, sampling-frequency index 3 (48 kHz), the
+matching mono/stereo channel configuration, no CRC, and its exact access-unit
+length. Three emitted mono packets concatenated as an `.aac` elementary stream
+were read by `ffprobe 9.0.1` as `codec_name=aac`, `sample_rate=48000`, and
+`channels=1`; `ffmpeg 9.0.1` decoded exactly 3,072 samples / 12,288 `f32le`
+bytes. The corresponding independently emitted stereo stream reports
+`channels=2` and decodes to exactly 3,072 samples per channel (6,144
+interleaved samples) / 24,576 `f32le` bytes. The crate's own decoder also reads
+each packet as one 1,024-sample frame with the matching channel count. Silence
+has no lossy-quality claim to compare — these checks establish framing and
+stream shape, not general quantisation quality.
 
 This is a direct API only, intentionally not a registered generic encoder and
 not a container-ready raw AAC access-unit writer: its packets include ADTS
@@ -960,7 +964,8 @@ plausible-looking implementation that a real bitstream falsifies.
 ## Configuration
 
 `AacLcSilenceEncoder` has no runtime options: its fixed input contract is
-packed `S16`, mono, 48 kHz, 1024 all-zero samples. The gating feature,
+packed `S16`, mono or stereo, 48 kHz, 1024 all-zero samples per channel. The
+gating feature,
 `patent-encumbered-aac-decode`, is set in `vaco-component.toml` and consumed entirely by
 `vaco-registry`/`cargo xtask gen-registry`/`cargo xtask patent-gate` — see
 "Why this is gated" above.
@@ -996,8 +1001,9 @@ ADTS transport syntax, also in `vaco-parse-aac`.
 
 Added by #449 (narrow ADTS silence encode): ISO/IEC 14496-3 subpart 1 Table
 1.A.5 (ADTS fixed/variable header fields) and subpart 4 Table 4.3
-(`raw_data_block()` element sequence) — `encoder.rs` writes only the
-single-SCE `ZERO_HCB` form documented above.
+(`raw_data_block()` element sequence) and Table 4.50
+(`individual_channel_stream()`) — `encoder.rs` writes only the mono-SCE or
+stereo-CPE `ZERO_HCB` forms documented above.
 
 Added by #445 (reconstruction): §4.6.1.3 (inverse quantisation),
 §4.6.2.3.3 (scalefactor gain), §4.5.2.3.5 (`quant_to_spec()`), §4.6.8.1.3

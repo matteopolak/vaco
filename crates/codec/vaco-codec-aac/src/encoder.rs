@@ -1,11 +1,12 @@
 //! A deliberately narrow AAC-LC ADTS silence encoder.
 //!
-//! It accepts one packed `S16` mono 48 kHz frame of exactly 1024 zero samples
-//! and writes one self-contained AAC-LC ADTS access unit. General quantisation,
-//! psychoacoustics, stereo, and container-ready raw access units remain out of
-//! scope.
+//! It accepts one packed `S16` mono or stereo 48 kHz frame of exactly 1024 zero
+//! samples per channel and writes one self-contained AAC-LC ADTS access unit.
+//! General quantisation, psychoacoustics, and container-ready raw access units
+//! remain out of scope.
 
 use vaco_bitstream::BitWriter;
+use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
 use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::{Frame, FrameData};
@@ -16,9 +17,10 @@ use vaco_sampfmt::SampleFmt;
 const SAMPLE_RATE: u32 = 48_000;
 const SAMPLES_PER_FRAME: u32 = 1024;
 const ADTS_HEADER_BYTES: u32 = 7;
-const PACKED_S16_FRAME_BYTES: usize = 2048;
+const MONO_PACKED_S16_FRAME_BYTES: usize = 2048;
+const STEREO_PACKED_S16_FRAME_BYTES: usize = 4096;
 
-/// AAC-LC ADTS encoding for exactly one mono silent long-window frame at a time.
+/// AAC-LC ADTS encoding for exactly one mono or stereo silent long-window frame at a time.
 #[derive(Debug)]
 pub struct AacLcSilenceEncoder {
     machine: Machine<Packet>,
@@ -36,10 +38,7 @@ impl AacLcSilenceEncoder {
     }
 }
 
-fn silent_raw_data_block() -> Vec<u8> {
-    let mut w = BitWriter::new();
-    w.put(3, 0); // ID_SCE
-    w.put(4, 0); // element_instance_tag
+fn write_silent_individual_channel_stream(w: &mut BitWriter) {
     w.put(8, 0); // global_gain is unused by ZERO_HCB
     w.put(1, 0); // ics_reserved_bit
     w.put(2, 0); // ONLY_LONG_SEQUENCE
@@ -51,12 +50,35 @@ fn silent_raw_data_block() -> Vec<u8> {
     w.put(1, 0); // pulse_data_present
     w.put(1, 0); // tns_data_present
     w.put(1, 0); // gain_control_data_present
-    w.put(3, 7); // ID_END
-    w.finish()
 }
 
-fn silent_adts_access_unit() -> Result<Vec<u8>> {
-    let raw = silent_raw_data_block();
+fn silent_raw_data_block(channel_configuration: u32) -> Result<Vec<u8>> {
+    let mut w = BitWriter::new();
+    match channel_configuration {
+        1 => {
+            w.put(3, 0); // ID_SCE
+            w.put(4, 0); // element_instance_tag
+            write_silent_individual_channel_stream(&mut w);
+        }
+        2 => {
+            w.put(3, 1); // ID_CPE
+            w.put(4, 0); // element_instance_tag
+            w.put(1, 0); // common_window
+            write_silent_individual_channel_stream(&mut w);
+            write_silent_individual_channel_stream(&mut w);
+        }
+        _ => {
+            return Err(Error::Unsupported(
+                "vaco-codec-aac: only mono and stereo ADTS silence is supported",
+            ));
+        }
+    }
+    w.put(3, 7); // ID_END
+    Ok(w.finish())
+}
+
+fn silent_adts_access_unit(channel_configuration: u32) -> Result<Vec<u8>> {
+    let raw = silent_raw_data_block(channel_configuration)?;
     let raw_len = u32::try_from(raw.len())
         .map_err(|_| Error::InvalidData("vaco-codec-aac: raw AAC frame is too large"))?;
     let frame_len = raw_len
@@ -73,7 +95,7 @@ fn silent_adts_access_unit() -> Result<Vec<u8>> {
     header.put(2, 1); // profile: AAC-LC
     header.put(4, 3); // sampling_frequency_index: 48000 Hz
     header.put(1, 0); // private_bit
-    header.put(3, 1); // channel_configuration: mono
+    header.put(3, channel_configuration); // channel_configuration
     header.put(1, 0); // original_copy
     header.put(1, 0); // home
     header.put(1, 0); // copyright_identification_bit
@@ -116,21 +138,30 @@ impl SendReceive for AacLcSilenceEncoder {
                         "vaco-codec-aac: expected an audio frame",
                     ));
                 };
+                let (channel_configuration, expected_plane_bytes) =
+                    if layout == &ChannelLayout::MONO {
+                        (1, MONO_PACKED_S16_FRAME_BYTES)
+                    } else if layout == &ChannelLayout::STEREO {
+                        (2, STEREO_PACKED_S16_FRAME_BYTES)
+                    } else {
+                        return Err(Error::Unsupported(
+                            "vaco-codec-aac: only mono or stereo S16 silence can be encoded",
+                        ));
+                    };
                 if *format != SampleFmt::S16
                     || *sample_rate != SAMPLE_RATE
                     || *samples != SAMPLES_PER_FRAME
-                    || layout.channels != 1
                     || planes.len() != 1
                 {
                     return Err(Error::Unsupported(
-                        "vaco-codec-aac: only packed S16 mono 48 kHz frames of exactly 1024 samples are supported",
+                        "vaco-codec-aac: only packed S16 mono or stereo 48 kHz frames of exactly 1024 samples are supported",
                     ));
                 }
                 let plane = planes
                     .first()
                     .ok_or(Error::InvalidData("vaco-codec-aac: missing audio plane"))?;
                 let samples = plane.data.as_slice();
-                if samples.len() != PACKED_S16_FRAME_BYTES
+                if samples.len() != expected_plane_bytes
                     || samples.iter().any(|&sample| sample != 0)
                 {
                     return Err(Error::Unsupported(
@@ -138,7 +169,7 @@ impl SendReceive for AacLcSilenceEncoder {
                     ));
                 }
 
-                let access_unit = silent_adts_access_unit()?;
+                let access_unit = silent_adts_access_unit(channel_configuration)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &access_unit)?;
                 packet.pts = frame.pts;
@@ -185,16 +216,9 @@ mod tests {
     use vaco_limits::{Budget, Limits};
     use vaco_sampfmt::SampleFmt;
 
-    fn silence_frame() -> Frame {
+    fn silence_frame(layout: ChannelLayout) -> Frame {
         let mut budget = Budget::new(Limits::permissive());
-        Frame::alloc_audio(
-            &mut budget,
-            SampleFmt::S16,
-            ChannelLayout::MONO,
-            1024,
-            48_000,
-        )
-        .unwrap()
+        Frame::alloc_audio(&mut budget, SampleFmt::S16, layout, 1024, 48_000).unwrap()
     }
 
     struct TemporaryAac {
@@ -207,9 +231,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn three_silent_frames_form_a_playable_adts_stream_with_exact_counts() {
-        let frame = silence_frame();
+    fn assert_playable_adts_stream(layout: ChannelLayout, channels: usize) {
+        let frame = silence_frame(layout);
         let mut encoder = AacLcSilenceEncoder::new(Limits::permissive());
         let mut stream = Vec::new();
         for _ in 0..3 {
@@ -249,7 +272,8 @@ mod tests {
         let fields = String::from_utf8(probe.stdout).unwrap();
         assert!(fields.contains("codec_name=aac"), "{fields}");
         assert!(fields.contains("sample_rate=48000"), "{fields}");
-        assert!(fields.contains("channels=1"), "{fields}");
+        let expected_channels = format!("channels={channels}");
+        assert!(fields.contains(&expected_channels), "{fields}");
 
         let decoded = Command::new("ffmpeg")
             .args(["-v", "error", "-i"])
@@ -262,13 +286,23 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&decoded.stderr)
         );
-        assert_eq!(decoded.stdout.len(), 3 * 1024 * 4);
+        assert_eq!(decoded.stdout.len(), 3 * 1024 * channels * 4);
         assert!(decoded.stdout.iter().all(|&sample| sample == 0));
     }
 
     #[test]
+    fn three_mono_silent_frames_form_a_playable_adts_stream_with_exact_counts() {
+        assert_playable_adts_stream(ChannelLayout::MONO, 1);
+    }
+
+    #[test]
+    fn three_stereo_silent_frames_form_a_playable_adts_stream_with_exact_counts() {
+        assert_playable_adts_stream(ChannelLayout::STEREO, 2);
+    }
+
+    #[test]
     fn a_silent_adts_packet_decodes_to_one_mono_aac_lc_frame() {
-        let frame = silence_frame();
+        let frame = silence_frame(ChannelLayout::MONO);
         let mut encoder = AacLcSilenceEncoder::new(Limits::permissive());
         encoder.send(Some(&frame)).unwrap();
         let packet = encoder.receive().unwrap();
@@ -286,5 +320,27 @@ mod tests {
             panic!("expected audio frame");
         };
         assert_eq!((sample_rate, samples, layout.channels), (48_000, 1024, 1));
+    }
+
+    #[test]
+    fn a_stereo_silent_adts_packet_decodes_to_one_stereo_aac_lc_frame() {
+        let frame = silence_frame(ChannelLayout::STEREO);
+        let mut encoder = AacLcSilenceEncoder::new(Limits::permissive());
+        encoder.send(Some(&frame)).unwrap();
+        let packet = encoder.receive().unwrap();
+
+        let mut decoder = AacDecoder::new(Limits::permissive());
+        decoder.send_packet(Some(&packet)).unwrap();
+        let decoded = decoder.receive_frame().unwrap();
+        let FrameData::Audio {
+            sample_rate,
+            samples,
+            layout,
+            ..
+        } = decoded.data
+        else {
+            panic!("expected audio frame");
+        };
+        assert_eq!((sample_rate, samples, layout.channels), (48_000, 1024, 2));
     }
 }
