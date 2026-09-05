@@ -2,10 +2,10 @@
 #
 # Colour/LUT video filters, plan 16 §4.2's `vaco-filter-color` row.
 # Implemented: colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor,
-# colorlevels, hue, exposure. The rest of the row (curves, colorbalance,
+# colorlevels, hue, exposure, colormatrix, limitdiff, tonemap. The rest of the row (curves, colorbalance,
 # colorcontrast, colorcorrect, colorize, colortemperature, huesaturation,
 # vibrance, selectivecolor, grayworld, greyedge, normalize, monochrome,
-# midequalizer, geq, colormap, limitdiff, tonemap, eq, histeq, colormatrix)
+# midequalizer, geq, colormap, eq, histeq) is not registered here — see
 # is not registered here — see `vaco_filter_color`'s crate-level doc for
 # what stopped colorbalance/grayworld specifically.
 #
@@ -88,6 +88,13 @@ kind = "filter"
 name = "limitdiff"
 long_name = "Apply filtering with limiting difference"
 ctor = "vaco_filter_color::limitdiff::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tonemap"
+long_name = "Convert HDR video to BT.709 SDR with BT.2390"
+ctor = "vaco_filter_color::tonemap::DESC"
 media = "video"
 
 [[component]]

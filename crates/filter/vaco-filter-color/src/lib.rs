@@ -2,7 +2,7 @@
 //!
 //! Implemented names are `colorchannelmixer`, `colorlevels`, `colormatrix`,
 //! `exposure`, `hue`, `limitdiff`, `lut`, `lutrgb`, `lutyuv`, `lut2`, and
-//! `pseudocolor`. Each module exposes a descriptor and constructor through
+//! `pseudocolor`, and `tonemap`. Each module exposes a descriptor and constructor through
 //! [`registry::ColorRegistry`]; unsupported names are not silently stubbed.
 //!
 //! [`sample`] provides shared integer access up to 16 bits and separate
@@ -15,8 +15,7 @@
 //!
 //! Several absent filters require distinct algorithms rather than registry
 //! work. `grayworld` needs a measured LAB-space global-average algorithm.
-//! `geq` needs a full expression-driven generator, while `tonemap` needs
-//! dynamic-range conversion. A `colorbalance` probe found `rs=1.0` produced a
+//! `geq` needs a full expression-driven generator. A `colorbalance` probe found `rs=1.0` produced a
 //! flat `delta=178` plateau for inputs 0 through about 24, followed by a
 //! nonlinear falloff to zero by 64; four `rs` probes confirmed the plateau
 //! scales linearly, but did not determine the falloff curve.
@@ -39,6 +38,7 @@ pub mod limitdiff;
 pub mod lut;
 pub mod lut2;
 pub mod pseudocolor;
+pub mod tonemap;
 
 pub mod registry;
 

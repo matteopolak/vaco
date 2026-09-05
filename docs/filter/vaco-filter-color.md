@@ -1,7 +1,8 @@
 # vaco-filter-color
 
 Colour and LUT-driven video filters: `colorchannelmixer`, `lut`, `lutrgb`,
-`lutyuv`, `lut2`, `pseudocolor`, `colorlevels`, `hue` (8/29).
+`lutyuv`, `lut2`, `pseudocolor`, `colorlevels`, `hue`, `exposure`,
+`colormatrix`, `limitdiff`, and `tonemap` (12/29).
 
 **2026-08-23 continuation pass**: added `hue` (chroma-vector rotation and
 saturation scale; `h`/`s` implemented as constants, `b`/brightness parsed
@@ -17,7 +18,7 @@ direction: `curves`, `colorbalance`, `colorcontrast`, `colorcorrect`,
 `colorize`, `colorlevels`, `colortemperature`, `huesaturation`, `hue`,
 `vibrance`, `exposure`, `selectivecolor`, `grayworld`, `greyedge`,
 `normalize`, `monochrome`, `midequalizer`, `geq`, `colormap`, `limitdiff`,
-`tonemap`, `eq`, `histeq`, `colormatrix`, plus the eight implemented
+`tonemap`, `eq`, `histeq`, `colormatrix`, plus the filters implemented
 here. The crate began life mis-scoped as a plane/component-shuffling
 crate (`vaco-filter-component`, GitHub issue #476) and was corrected
 into this row mid-flight — see the issue for the full story.
@@ -25,7 +26,7 @@ into this row mid-flight — see the issue for the full story.
 continuation); the six before those carried over from before the
 correction.
 
-**Left for follow-up, stated honestly** (21 filters): each is a real
+**Left for follow-up, stated honestly** (17 filters): each is a real
 GitHub-issue-sized unit of work, but three deserve a specific note
 because probing them found real walls rather than just "not attempted":
 
@@ -34,15 +35,10 @@ because probing them found real walls rather than just "not attempted":
   from `v=0` to `v≈24`, then a non-linear falloff to `0` by `v=64`. The
   linear-in-`rs` scaling is confirmed; the per-pixel weighting curve
   itself is not.
-- `exposure` and `grayworld` both force `gbrpf32le` (planar 32-bit float)
-  output, which this crate's whole `sample` engine deliberately excludes
-  (`PixFmtFlags::FLOAT`) — these need a float-sample accessor this crate
-  does not have yet, not just a new filter module. **Established, not
-  re-assumed, in the 2026-08-23 continuation pass** — see "Float-plane
-  support: established, not assumed" below.
-- `geq`/`tonemap` were flagged in advance as the likely filters to leave
-  (a full expression-evaluated generator, and dynamic-range conversion)
-  and were not investigated in this pass either.
+- `grayworld` forces `gbrpf32le` (planar 32-bit float) output and needs a
+  whole-frame colour statistic rather than the existing local sample loop.
+- `geq` remains an expression-evaluated generator, a distinct architecture
+  from the precomputed per-channel LUT filters.
 
 ## Float-plane support: established, not assumed
 
@@ -166,6 +162,19 @@ measured to be asymmetric around zero (`b=1.0` measures `Y+25`, `b=-1.0`
 measures `Y-26`, not `Y-25`), which rules out a single linear `Y' = Y +
 k*b` term and was not decomposed further in the time available.
 
+### `tonemap`: one colour-management pipeline
+
+`tonemap` is deliberately a thin filter adapter over `vaco-scale`, not a
+second implementation of HDR arithmetic. It accepts PQ or HLG input, reads
+mastering-display peak before content-light peak (then the scaler's documented
+transfer fallback), and emits BT.709 SDR at `peak` nits (100 by default).
+`intent` selects the same four ICC-named policies as `ScaleOptions`, and
+`lut3d_size` is the scaler's bounded `9..=65` coded-RGB lattice. The scaler
+applies BT.2390-3 Annex 5's EETF, primary conversion, gamut intent, and the
+shared tetrahedral interpolation. It removes HDR peak side data after a
+successful map so SDR metadata cannot contradict the output pixels. A
+non-HDR frame is an exact pass-through rather than an invented conversion.
+
 ## How to change it
 
 - Add a new colour filter from the row above as its own module, following
@@ -189,4 +198,5 @@ knobs are its own `vaco_opts::Options` struct, documented in each module.
 
 `vaco-core`, `vaco-opts`, `vaco-expr` (the `lut`/`lut2`/`pseudocolor`
 expression language), `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
-`vaco-filter-graph`, `vaco-filter-framesync` (for `lut2`).
+`vaco-filter-graph`, `vaco-filter-framesync` (for `lut2`), `vaco-color`,
+and `vaco-scale` (the BT.2390/gamut/LUT implementation).

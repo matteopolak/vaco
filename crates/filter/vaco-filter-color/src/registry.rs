@@ -17,6 +17,7 @@ const NAMES: &[&str] = &[
     "lutrgb",
     "lutyuv",
     "pseudocolor",
+    "tonemap",
 ];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
@@ -41,6 +42,7 @@ impl FilterRegistry for ColorRegistry {
             "lutyuv" => crate::lut::lutyuv::create(req),
             "lut2" => crate::lut2::create(req),
             "pseudocolor" => crate::pseudocolor::create(req),
+            "tonemap" => crate::tonemap::create(req),
             other => Err(format!("vaco-filter-color: no filter named `{other}`")),
         }
     }
