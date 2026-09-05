@@ -206,6 +206,43 @@ impl TileLayout {
         Ok(decoder)
     }
 
+    /// Initialize one fresh CABAC engine for every tile substream.
+    ///
+    /// Each range is an independent §9.3.1.2 arithmetic state boundary. The
+    /// initializer consumes only its mandatory nine-bit offset; no CTB syntax
+    /// bins are consumed until tile reconstruction is proven.
+    ///
+    /// # Errors
+    ///
+    /// Propagates tile range validation and rejects an empty or malformed
+    /// substream before returning any tile decoder state.
+    pub fn initialize_tile_cabac_substreams<'a>(
+        &self,
+        data: &'a [u8],
+        entry_point_offsets: &[u32],
+    ) -> Result<Vec<CabacDecoder<'a>>> {
+        let ranges = self.tile_substream_byte_ranges(data.len(), entry_point_offsets)?;
+        let mut decoders = Vec::new();
+        for (start, end) in ranges {
+            if start == end {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile substream is empty",
+                ));
+            }
+            let bytes = data.get(start..end).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: tile substream range is invalid",
+            ))?;
+            let decoder = CabacDecoder::new(bytes);
+            if decoder.malformed() {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile CABAC initialization is malformed",
+                ));
+            }
+            decoders.push(decoder);
+        }
+        Ok(decoders)
+    }
+
     /// Return `(tile_id, tile-local raster CTB address)` for a CTB.
     ///
     /// The tile-local address is the address consumed by a tile substream,

@@ -145,6 +145,26 @@ fn malformed_first_tile_cabac_initializer_is_refused() {
 }
 
 #[test]
+fn malformed_later_tile_cabac_initializer_is_refused() {
+    let tiles = Tiles {
+        num_columns: 2,
+        num_rows: 1,
+        uniform_spacing: true,
+        column_widths: Vec::new(),
+        row_heights: Vec::new(),
+        loop_filter_across_tiles: false,
+    };
+    let layout = TileLayout::from_pps(&tiles, 2, 1).expect("two tiles are valid");
+    let error = layout
+        .initialize_tile_cabac_substreams(&[0, 0, 0xff, 0xe0], &[2])
+        .expect_err("the second tile's 511 offset is forbidden");
+    assert!(matches!(
+        error,
+        Error::InvalidData("vaco-codec-hevc: tile CABAC initialization is malformed")
+    ));
+}
+
+#[test]
 fn real_tile_slice_header_has_one_tile_entry_point_offset() {
     let limits = Limits::default();
     let mut parser = HevcParser::new(limits.clone());
@@ -190,6 +210,14 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
             (header.entry_point_offsets[0] as usize, slice_data.len())
         ]
     );
+    let tile_cabac = layout
+        .initialize_tile_cabac_substreams(slice_data, &header.entry_point_offsets)
+        .expect("each tile CABAC state initializes");
+    assert_eq!(tile_cabac.len(), 2);
+    for cabac in &tile_cabac {
+        assert_eq!(cabac.range(), 510);
+        assert!(!cabac.malformed());
+    }
     let cabac = layout
         .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
         .expect("first tile CABAC state initializes");

@@ -976,8 +976,11 @@ addresses reset at the column boundary and that each tile's first CTB starts a
 fresh tile-local CABAC state. It also parses the real slice header
 and maps its one coded-byte entry-point length to the two half-open tile-scan
 ranges, then calls `TileLayout::initialize_first_tile_cabac` to validate the
-first tile's §9.3.1.2 arithmetic initializer without consuming a CTB bin.
-Finally it sends the same access unit to `HevcDecoder` and
+first tile's §9.3.1.2 arithmetic initializer without consuming a CTB bin. The
+same check is also applied to every tile range by
+`TileLayout::initialize_tile_cabac_substreams`, proving both independent
+arithmetic state boundaries in this stream. Finally it sends the same access
+unit to `HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before any
 CABAC data is decoded. This keeps the parser's §7.3.2.3 tile syntax and the
