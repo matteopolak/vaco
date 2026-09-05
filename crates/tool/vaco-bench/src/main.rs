@@ -2,14 +2,18 @@
 //! Command-line interface for registry-complete benchmark tracking.
 
 use std::ffi::OsString;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use vaco_bench::{
-    BenchError, ChildBatchMode, FilterBenchConfig, MeasurementBackend, apply_baseline,
-    filter_cases, regressions, run_filter_child_batch, run_filter_suite, verify_machine_control,
+    BenchError, BenchmarkSandbox, ChildBatchMode, CommandTemplate, FilterBenchConfig,
+    Implementation, MacroScenario, MeasurementBackend, apply_baseline, filter_cases, regressions,
+    run_filter_child_batch, run_filter_suite, run_macro_scenario, verify_machine_control,
     write_jsonl, write_report,
 };
+use vaco_corpus::fetch::{self, NetworkPolicy};
+use vaco_corpus::{ObjectId, Store, embedded_catalogue};
 
 fn main() -> ExitCode {
     match run(std::env::args_os().skip(1)) {
@@ -32,6 +36,7 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
             Ok(ExitCode::SUCCESS)
         }
         Some(command) if command == "machine-check" => run_machine_check(args),
+        Some(command) if command == "macro" => run_macro(args),
         Some(command) if command == "__filter-batch" => run_filter_child(args),
         Some(command) if command == "filter" => run_filter(args),
         Some(command) if command == "report" => run_report(args),
@@ -47,6 +52,126 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
         ))),
         None => Err(CliError::Usage(usage().to_owned())),
     }
+}
+
+#[derive(Debug, Default)]
+struct MacroArgs {
+    name: Option<String>,
+    asset: Option<String>,
+    expected_output: Option<ObjectId>,
+    vaco: Option<PathBuf>,
+    reference: Option<PathBuf>,
+    vaco_args: Vec<String>,
+    reference_args: Vec<String>,
+    cache_dir: Option<PathBuf>,
+    rounds: usize,
+}
+
+fn run_macro(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
+    let parsed = parse_macro_args(args)?;
+    let report = verify_machine_control();
+    if !report.is_ready() {
+        eprintln!("machine control: not ready; {}", report.failure_summary());
+        return Ok(ExitCode::from(2));
+    }
+    let scenario = MacroScenario {
+        name: parsed
+            .name
+            .ok_or_else(|| CliError::Usage("--scenario is required".to_owned()))?,
+        asset: parsed
+            .asset
+            .ok_or_else(|| CliError::Usage("--asset is required".to_owned()))?,
+        vaco: CommandTemplate {
+            program: parsed
+                .vaco
+                .ok_or_else(|| CliError::Usage("--vaco is required".to_owned()))?,
+            args: parsed.vaco_args,
+        },
+        reference: CommandTemplate {
+            program: parsed
+                .reference
+                .ok_or_else(|| CliError::Usage("--reference is required".to_owned()))?,
+            args: parsed.reference_args,
+        },
+        expected_output: parsed
+            .expected_output
+            .ok_or_else(|| CliError::Usage("--expected-output-sha256 is required".to_owned()))?,
+    };
+    let catalogue = embedded_catalogue();
+    let entry = catalogue
+        .find(&scenario.asset)
+        .ok_or_else(|| CliError::Usage(format!("unknown corpus asset {:?}", scenario.asset)))?;
+    let store = parsed.cache_dir.map_or_else(Store::open_default, Store::at);
+    let bytes = fetch::fetch_asset(entry, &store, NetworkPolicy::from_env())
+        .map_err(|error| BenchError::Macro(format!("{}: {error}", scenario.asset)))?;
+    let _sandbox = BenchmarkSandbox::enter()?;
+    let sandbox = std::env::current_dir().map_err(BenchError::Io)?;
+    let input = sandbox.join("input.bin");
+    fs::write(&input, bytes).map_err(BenchError::Io)?;
+    let samples = run_macro_scenario(&scenario, &input, parsed.rounds, &sandbox)?;
+    for implementation in [Implementation::Vaco, Implementation::Reference] {
+        let times: Vec<_> = samples
+            .iter()
+            .filter(|sample| sample.implementation == implementation)
+            .map(|sample| sample.wall_ns)
+            .collect();
+        let stats = vaco_bench::summarize(&times).ok_or(BenchError::NoSamples)?;
+        println!(
+            "{} {} samples={} median={:.3}ns mad={:.3}ns min={:.3}ns p95={:.3}ns",
+            scenario.name,
+            implementation.name(),
+            times.len(),
+            stats.median,
+            stats.mad,
+            stats.min,
+            stats.p95,
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn parse_macro_args(args: impl Iterator<Item = OsString>) -> Result<MacroArgs, CliError> {
+    let mut parsed = MacroArgs {
+        rounds: 11,
+        ..MacroArgs::default()
+    };
+    let mut args = args;
+    while let Some(flag) = args.next() {
+        match flag.to_str() {
+            Some("--scenario") => parsed.name = Some(text_value(&mut args, "--scenario")?),
+            Some("--asset") => parsed.asset = Some(text_value(&mut args, "--asset")?),
+            Some("--expected-output-sha256") => {
+                let hash = text_value(&mut args, "--expected-output-sha256")?;
+                parsed.expected_output = Some(ObjectId::parse(&hash).ok_or_else(|| {
+                    CliError::Usage(
+                        "--expected-output-sha256 requires 64 hexadecimal characters".to_owned(),
+                    )
+                })?);
+            }
+            Some("--vaco") => parsed.vaco = Some(path_value(&mut args, "--vaco")?),
+            Some("--reference") => parsed.reference = Some(path_value(&mut args, "--reference")?),
+            Some("--vaco-arg") => parsed.vaco_args.push(text_value(&mut args, "--vaco-arg")?),
+            Some("--reference-arg") => parsed
+                .reference_args
+                .push(text_value(&mut args, "--reference-arg")?),
+            Some("--cache-dir") => parsed.cache_dir = Some(path_value(&mut args, "--cache-dir")?),
+            Some("--rounds") => {
+                parsed.rounds = usize_value(&mut args, "--rounds")?;
+                if parsed.rounds < 11 {
+                    return Err(CliError::Usage("--rounds must be at least 11".to_owned()));
+                }
+            }
+            Some("--help" | "-h") => return Err(CliError::Usage(macro_usage().to_owned())),
+            _ => {
+                return Err(CliError::Usage(format!(
+                    "unknown macro option {}\n\n{}",
+                    PathBuf::from(flag).display(),
+                    macro_usage()
+                )));
+            }
+        }
+    }
+    Ok(parsed)
 }
 
 fn run_machine_check(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
@@ -370,7 +495,11 @@ fn print_usage() {
 }
 
 fn usage() -> &'static str {
-    "usage: vaco-bench list\n       vaco-bench machine-check\n       vaco-bench filter [options]\n       vaco-bench report [options]"
+    "usage: vaco-bench list\n       vaco-bench machine-check\n       vaco-bench macro [options]\n       vaco-bench filter [options]\n       vaco-bench report [options]"
+}
+
+fn macro_usage() -> &'static str {
+    "usage: vaco-bench macro --scenario ID --asset CORPUS_ENTRY --vaco PATH --reference PATH --expected-output-sha256 SHA256 [--vaco-arg ARG]... [--reference-arg ARG]... [--cache-dir DIR] [--rounds N]\n\nEach command must contain whole-argument {input} and {output} placeholders."
 }
 
 fn filter_usage() -> &'static str {

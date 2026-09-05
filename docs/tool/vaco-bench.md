@@ -133,6 +133,34 @@ CARGO_INCREMENTAL=0 RUSTC_WRAPPER= cargo run --release -p vaco-bench --locked \
   --target-dir /private/tmp/vaco-bench-target -- machine-check
 ```
 
+### Whole-process macro scenarios
+
+`vaco-bench macro` is the reusable S1--S10 execution primitive. It refuses to
+start until `machine-check` succeeds, resolves one named entry from
+`vaco-corpus`'s embedded `vaco-media.lock`, verifies or fetches it through the
+existing opt-in corpus policy, and places the verified bytes in the benchmark
+sandbox. The two command templates receive exact `{input}` and `{output}`
+arguments. Each implementation must write an output whose SHA-256 equals the
+required `--expected-output-sha256`; a failed child, missing output, or hash
+mismatch discards the run rather than publishing a fast wrong result.
+
+The runner performs at least eleven rounds and alternates Vaco/reference order
+on every round. It records monotonic wall time and reports median, MAD, min,
+and p95 separately for each command. The macro process accepts a generic
+template because decode, encode, scale, resample, filters, seek, startup,
+memory, and thread-determinism scenarios need different CLI arguments but all
+share the same corpus, interleaving, and useful-output contract.
+
+```sh
+# Both commands must use {input} and {output} as whole arguments. Set
+# VACO_CORPUS_NETWORK=1 only when a cache miss may fetch the locked asset.
+vaco-bench macro --scenario S1/vp9/1080p/t1 \
+  --asset vp9-size-10x10 --vaco /opt/vaco/vvmpeg --reference ffmpeg \
+  --vaco-arg -i --vaco-arg '{input}' --vaco-arg -f --vaco-arg framemd5 --vaco-arg '{output}' \
+  --reference-arg -i --reference-arg '{input}' --reference-arg -f --reference-arg framemd5 --reference-arg '{output}' \
+  --expected-output-sha256 '<known-framemd5-sha256>' --rounds 11
+```
+
 ## CI result tracking
 
 `.github/workflows/filter-benchmarks.yml` has two paths:
@@ -183,6 +211,11 @@ Linux, for example when the matching kernel-tools binary is not on `PATH`.
 `machine-check` accepts no options. It reads the live `/proc` and `/sys` views;
 there are deliberately no environment-variable overrides that could turn a
 missing hardware control into a passing result.
+
+`macro` requires `--scenario`, `--asset`, `--vaco`, `--reference`, and
+`--expected-output-sha256`. Repeat `--vaco-arg` and `--reference-arg` to build
+each command line. `--cache-dir` selects a corpus object-store root and
+`--rounds` defaults to 11; lower values are rejected.
 
 `report` accepts `--input`, `--output`, optional `--generated-unix-ms`, and
 `--fail-under` (default `0.95`). Its input is combined schema-1 filter JSONL;

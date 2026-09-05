@@ -2295,6 +2295,7 @@ name = "vaco-bench"
 version = "0.1.0"
 dependencies = [
  "divan",
+ "vaco-corpus",
  "vaco-filter-graph",
  "vaco-registry",
 ]

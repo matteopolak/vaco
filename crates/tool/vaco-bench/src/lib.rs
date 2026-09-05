@@ -2,6 +2,7 @@
 //! Registry-complete benchmark measurement and comparison.
 
 mod machine_control;
+mod macro_runner;
 mod perf_stat;
 mod report;
 
@@ -21,6 +22,9 @@ use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 use perf_stat::BatchCommand;
 
 pub use machine_control::{MachineCheck, MachineControlReport, verify_machine_control};
+pub use macro_runner::{
+    CommandTemplate, Implementation, MacroSample, MacroScenario, run_macro_scenario,
+};
 
 const TRAILING_BASELINES: usize = 7;
 const PERF_STAT_MIN_BATCH_NS: u64 = 20_000_000;
@@ -1133,6 +1137,9 @@ pub enum BenchError {
     InvalidBaseline(String),
     /// The requested physical counter could not produce a usable measurement.
     BackendUnavailable(String),
+    /// A whole-process macro scenario was malformed, failed, or produced the
+    /// wrong useful output.
+    Macro(String),
 }
 
 impl fmt::Display for BenchError {
@@ -1165,6 +1172,7 @@ impl fmt::Display for BenchError {
             Self::BackendUnavailable(detail) => {
                 write!(formatter, "measurement backend unavailable: {detail}")
             }
+            Self::Macro(detail) => write!(formatter, "macro benchmark failed: {detail}"),
         }
     }
 }
