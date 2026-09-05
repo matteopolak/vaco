@@ -353,7 +353,28 @@ impl SliceHeader {
         if h.dependent {
             // §7.4.7.1: everything below is inherited from the preceding
             // independent slice segment. Stopping here is the syntax, not a
-            // shortcut.
+            // shortcut. The extension and byte-alignment syntax still
+            // terminates this segment header, even though the slice state
+            // fields between the address and it are inherited.
+            if pps.has_entry_points() {
+                let n = g.ue_v(max_entry_points(sps, pps))?;
+                if n > 0 {
+                    let len = g.ue_v(31)? + 1;
+                    g.budget().consume_fuel(u64::from(n))?;
+                    for _ in 0..n {
+                        h.entry_point_offsets.push(g.u(len)?.saturating_add(1));
+                    }
+                }
+            }
+            if pps.slice_segment_header_extension_present {
+                let n = g.ue_v(MAX_SLICE_HEADER_EXTENSION)?;
+                g.budget().consume_fuel(u64::from(n))?;
+                for _ in 0..n {
+                    g.u(8)?;
+                }
+            }
+            g.u(1)?;
+            g.reader().align();
             return Ok(h);
         }
 

@@ -870,8 +870,28 @@ two independent segments covering two complete CTU rows each. The stream is
 `75dbd6e7e7659e26de62c96ff03b8e219ea2fc8107e69e5895a7df5adaba9354`; black-box
 `ffmpeg` decoding yields exactly 196,608 visible bytes with MD5
 `138d30492cca3f85709c514b8b4d9bac`, and Vaco matches both the frame count and
-the digest. Filtered or non-row-aligned multi-segment WPP remains refused by
-name because its neighbour and in-loop-filter state needs a separate proof.
+the digest. Non-row-aligned WPP remains refused by name because its neighbour
+state needs a separate proof.
+
+### Dependent WPP slice segments — one-CTU-wide conformance shape
+
+The registered corpus entry `jctvc-hevc-wpp-d-ericsson-main-2`
+(`WPP_D_ericsson_MAIN_2`) exercises WPP in a one-CTU-wide
+picture, including independent and dependent segments, variable one- and
+two-row segment lengths, per-row entry-point substreams, and slice-header
+extension bytes. Dependent headers inherit the active slice syntax; their
+entry-point and extension syntax is still parsed, and each WPP row starts the
+CABAC context prescribed by §9.3.2.3. A one-CTU-wide segment with no entry
+points is one continuous substream across its rows, so its CABAC state remains
+continuous until the segment terminator.
+
+The checked-in 22,474-byte Annex-B stream (SHA-256
+`30eec63f2324aa982fb91bd4c1c551c833c253ba711ee131aa9cc4d322398caf`) decodes
+to 48 64x240 yuv420p frames, exactly 1,105,920 visible bytes. The archive's
+published and Vaco/black-box reference MD5 is
+`f710612103f386c415be3e6300693451`, and the complete Y, U, and V byte stream
+matches. WPP segments that are not row-aligned, or whose filtering is disabled
+across a filtered slice boundary, remain named refusals.
 
 ## Tile pictures — named refusal verified by a real two-column stream
 
@@ -1477,8 +1497,10 @@ Dependent and independent multi-segment pictures are assembled by the
 constraints described above; only multi-segment WPP, tile pictures, and
 independent segments with a genuinely different picture-level RPS or other
 unsupported decoding state remain named refusals. The supported WPP
-multi-segment subset is limited to independent, row-aligned segments with SAO
-and deblocking disabled; dependent or filtered WPP combinations remain
+multi-segment subset is limited to row-aligned independent segments, plus the
+bounded one-CTU-wide dependent shape documented above; filtered boundaries are
+accepted only when cross-slice filtering is enabled. Non-row-aligned
+boundaries and filtered boundaries without cross-slice filtering remain
 refused.
 
 ## The `Budget::release` leak past 640x480, found and fixed

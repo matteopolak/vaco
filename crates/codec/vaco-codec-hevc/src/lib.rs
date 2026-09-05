@@ -125,14 +125,16 @@
 //!   chroma formats other than 4:2:0, `separate_colour_plane_flag`,
 //!   tiles, chroma QP offset lists, every SPS/PPS range-extension and
 //!   screen-content-coding flag,
-//!   long-term reference pictures. Dependent slice segments inherit their
-//!   preceding independent header and CABAC context, while independent
+//!   long-term reference pictures. Dependent non-WPP slice segments inherit
+//!   their preceding independent header and CABAC context, while independent
 //!   segments restart both. Multiple independent segments are decoded when
 //!   they share their picture-wide context, enable filtering across their
 //!   boundaries, and do not use WPP. Independent WPP segments are supported
-//!   when they begin and end on complete CTU rows and in-loop filtering is
-//!   disabled; dependent WPP segments and filtered WPP boundaries are refused
-//!   by name rather than decoded with the wrong neighbour availability. The SPS/PPS ones are refused at
+//!   when they begin and end on complete CTU rows; dependent WPP segments
+//!   inherit slice syntax while each row keeps WPP's context reset, and
+//!   filtered boundaries are accepted only when cross-slice filtering is
+//!   enabled. Other WPP boundaries are refused by name rather than decoded
+//!   with the wrong neighbour availability. The SPS/PPS ones are refused at
 //!   `check_scope`; the rest the moment the bitstream actually uses the
 //!   feature, so a PPS that declares a flag it never exercises decodes fine.
 //!
