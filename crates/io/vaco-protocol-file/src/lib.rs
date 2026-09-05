@@ -1,29 +1,14 @@
 //! The `file:` and `pipe:` protocols.
 //!
-//! # What it is
-//!
-//! The two protocols every other part of the system assumes exist: a local file
-//! (seekable, sized, the reference case for `Seekability::Cheap`) and a
-//! standard stream (forward-only, unsized, the reference case for
-//! `Seekability::None`). Between them they exercise both ends of the
-//! seekability model, which is why they are built together.
-//!
-//! # How it works
-//!
-//! Neither type implements [`MediaSource`](vaco_io::MediaSource) directly. Both
-//! implement the thin [`RawSource`](vaco_io::RawSource) — one call per syscall —
-//! and are wrapped in [`PeekSource`](vaco_io::PeekSource), which supplies the
-//! peek window. Buffering happens once more, higher up, in
-//! [`IoContext`](vaco_io::IoContext). Three layers, each with one job, and no
-//! byte copied twice in the steady state.
-//!
-//! # Security
+//! [`FileProtocol`] provides a seekable, sized local file, while [`PipeProtocol`]
+//! provides a forward-only standard stream. Together they exercise both ends of
+//! the `Seekability` model. Both implement [`RawSource`](vaco_io::RawSource),
+//! are wrapped in [`PeekSource`](vaco_io::PeekSource), and are buffered by
+//! [`IoContext`](vaco_io::IoContext).
 //!
 //! [`file::FileProtocol`] honours [`ProtocolEnv::root`](vaco_protocol_core::ProtocolEnv)
-//! (rule U2): when a caller opens a URL it did not write — a `concat` list, a
-//! local HLS playlist — it names a root, and the open is refused if the
-//! *canonical* target falls outside it. Canonical, so a symlink out of the root
-//! is refused rather than followed.
+//! (rule U2): an untrusted URL is opened only when its *canonical* target stays
+//! inside the configured root, so a symlink cannot escape it.
 //!
 //! # Example
 //!
