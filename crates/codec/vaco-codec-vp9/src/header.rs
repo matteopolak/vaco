@@ -10,8 +10,7 @@
 //! header forward-updates it (`crate::decode::Vp9Decoder::decode_one_frame`
 //! implements the `save_probs`/`load_probs`/`frame_context_idx` machinery
 //! around this). Backward probability adaptation (§8.3/8.4) is *not*
-//! implemented — see `planning/TECH-DEBT.md` for what that means for a
-//! multi-frame GOP's later frames.
+//! implemented, so later frames in a multi-frame GOP do not update that model.
 
 use vaco_bitstream::BitReader;
 use vaco_codec_msac::Vp9BoolDecoder as Bd;
@@ -62,8 +61,8 @@ fn color_config(r: &mut BitReader<'_>, profile: u8) -> ColorConfig {
     }
 }
 
-/// §6.2.8's loop filter parameters (parsed and stored; not applied by this
-/// crate, whose scope stops before the loop filter — epic #32/C-32a).
+/// §6.2.8's loop filter parameters, parsed and stored but not applied by this
+/// crate because its scope stops before the loop filter.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopFilterParams {
     pub level: i32,
@@ -1115,7 +1114,7 @@ mod tests {
     /// testsrc2=size=160x96:rate=5:duration=1.6 -pix_fmt yuv422p -c:v
     /// libvpx-vp9 -profile:v 1 -frame-parallel 1 -error-resilient max
     /// -lag-in-frames 0 -b:v 500k -g 30`, second IVF frame payload, in full
-    /// (1429 bytes)) — regression coverage for #327: a regular inter frame's
+    /// (1429 bytes)): a regular inter frame's
     /// own bits never re-signal `color_config()` (only a key frame or a
     /// profile>0 intra-only frame do), so before `prev_color` existed as a
     /// parameter here, this frame's parsed `color` was a hardcoded 4:2:0
