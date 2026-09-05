@@ -1295,9 +1295,7 @@ impl MpegTsDemuxer {
         if let (Some(end), Some(start)) = (latest, earliest) {
             let ticks = end.saturating_sub(start).max(0);
             self.duration_exact = ExactDuration::from_ticks(ticks, TIME_BASE);
-            self.duration = self
-                .duration_exact
-                .and_then(|value| value.to_duration(Rounding::default()));
+            self.duration = self.duration_exact;
         }
         Ok(())
     }

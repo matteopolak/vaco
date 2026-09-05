@@ -244,6 +244,10 @@ fn pmt(program: u16, version: u8, pcr_pid: u16, streams: &[(u8, u16, Vec<u8>)]) 
 /// A two-stream file: `frames` video frames at 25 fps and one audio frame per
 /// video frame, starting at 90 000 ticks (one second).
 fn simple_file(frames: usize) -> Vec<u8> {
+    simple_file_with_step(frames, 3600)
+}
+
+fn simple_file_with_step(frames: usize, step: i64) -> Vec<u8> {
     let mut w = TsWriter::new();
     w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
     w.section(
@@ -259,7 +263,7 @@ fn simple_file(frames: usize) -> Vec<u8> {
         ),
     );
     for i in 0..frames {
-        let pts = 90_000 + (i as i64) * 3600;
+        let pts = 90_000 + (i as i64) * step;
         w.pes(
             VIDEO_PID,
             0xE0,
@@ -459,8 +463,9 @@ fn start_time_and_duration_are_estimated_because_nothing_declares_them() {
 
 #[test]
 fn estimated_container_duration_retains_clock_fraction() {
-    let d = open(simple_file(7));
-    assert_eq!(d.duration_exact().unwrap().as_ratio(), (7, 25));
+    let d = open(simple_file_with_step(7, 3001));
+    assert_eq!(d.duration_exact().unwrap().as_ratio(), (21_007, 90_000));
+    assert_eq!(d.duration().unwrap().as_ratio(), (21_007, 90_000));
 }
 
 #[test]

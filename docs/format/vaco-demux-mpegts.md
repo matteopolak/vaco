@@ -176,10 +176,10 @@ below the longest stream lasts 3.000000 s and the container reports 3.023222,
 because the container spans from the earliest start to the latest end and the
 two streams do not start together.
 
-The demuxer retains that container span as an `ExactDuration` built directly
-from the 90 kHz clock ticks. Its ordinary `Duration` remains the rounded
-microsecond compatibility view, while `Demuxer::duration_exact()` preserves
-the rational value for probe output and later comparisons.
+The demuxer retains that container span as a rational `Duration` built directly
+from the 90 kHz clock ticks. Both `duration()` and its compatibility alias
+`duration_exact()` preserve the same value for probe output and later
+comparisons; no microsecond conversion occurs between the two APIs.
 
 `tail` is where a demuxer with no parser cannot quite reach. The reference uses
 `last_packet.pts + last_packet.duration`, and that duration comes from the
