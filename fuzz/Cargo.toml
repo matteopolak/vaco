@@ -502,7 +502,7 @@ filter-asource = ["dep:vaco-filter-asource", "dep:vaco-filter-graph", "dep:vaco-
 filter-audio = ["dep:vaco-expr", "dep:vaco-filter-audio", "dep:vaco-filter-graph", "dep:vaco-opts"]
 filter-blur = ["dep:vaco-filter-blur", "dep:vaco-filter-graph"]
 filter-color = ["dep:vaco-filter-color", "dep:vaco-filter-graph"]
-filter-convolve = ["dep:vaco-filter-convolve", "dep:vaco-filter-graph"]
+filter-convolve = ["dep:vaco-color", "dep:vaco-core", "dep:vaco-filter-convolve", "dep:vaco-filter-core", "dep:vaco-filter-graph", "dep:vaco-frame", "dep:vaco-pixfmt"]
 filter-core = ["dep:vaco-core", "dep:vaco-filter-core", "dep:vaco-pixfmt"]
 filter-deinterlace = ["dep:vaco-filter-deinterlace", "dep:vaco-filter-graph"]
 filter-denoise = ["dep:vaco-filter-denoise", "dep:vaco-filter-graph"]
@@ -1182,6 +1182,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-color"]
+
+[[bin]]
+name = "filter_convolve_frames"
+path = "fuzz_targets/filter_convolve_frames.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-convolve"]
 
 [[bin]]
 name = "filter_convolve_options"

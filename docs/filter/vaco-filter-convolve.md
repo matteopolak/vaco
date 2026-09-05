@@ -359,6 +359,36 @@ twelve filters that landed.
   similar and are not interchangeable — see `apply_structured`'s doc for
   the measured reason.
 
+### Frame-data fuzzing
+
+`fuzz/fuzz_targets/filter_convolve_frames.rs` complements the option-parser
+target by driving fuzzed Gray8 pixels through all twelve registered filters.
+It uses the public `parse_and_build` path, endpoint attachment, negotiation,
+and scheduler; `morpho` gets a real fuzzed structuring-element frame on its
+second input. Dimensions are capped at 32x32, median radii at four pixels, and
+`morpho` structures at 7x7 so campaigns spend time in the pixel engines rather
+than allocation.
+
+Each case must reach EOF within 256 scheduler steps, emit exactly one frame,
+preserve dimensions, timestamps, duration and time base, keep every row and
+backing allocation inside the derived bounds, and produce byte-identical
+visible output in a fresh graph. Dilation and inflate additionally may never
+decrease a pixel;
+erosion and deflate may never increase one. `morpho` carries the same checks
+for its dilate/erode modes because the target always activates the structure's
+centre. Independent oracles also pin zero-threshold morphology as an identity,
+the scalar convolution identity, median's input-value bounds, and every edge
+operator's `scale=0` result.
+
+The bootstrap corpus in `fuzz/seeds/filter_convolve_frames/` enters every
+filter, every `morpho` mode, both structure-freezing choices, representative
+convolution kernels and median percentiles, the threshold extrema, fractional
+edge scales, clipped edge deltas, and 1x1/32x32 dimension boundaries before
+mutation begins. When a campaign
+finds a bug, move its minimized input to
+`fuzz/seeds/filter_convolve_frames/` and leave `fuzz/artifacts/` empty after
+the fix.
+
 ## Configuration
 
 No environment variables, flags or config files. Every option is the
