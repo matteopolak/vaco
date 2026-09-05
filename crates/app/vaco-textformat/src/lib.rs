@@ -1,69 +1,39 @@
 //! Output writers: `default`, `compact`, `csv`, `flat`, `ini`, `json`, `xml`.
 //!
-//! This crate is the v0.1 acceptance surface (D5): `ffprobe`'s output must be
-//! **byte-identical** to the reference binary's (D6), and this is where every
-//! byte is decided. A trailing space is a failure, so every rule here is an
-//! *observation* of ffprobe 8.1, not a design.
+//! This is the v0.1 acceptance surface (D5): `ffprobe` output must be
+//! **byte-identical** to `ffprobe 8.1` (D6), including the absence of trailing
+//! spaces. Every rule here is an observation of that reference, not a design.
 //!
-//! # The model
+//! # Model
 //!
-//! Output is a tree of **sections** (`sections`), and the caller drives it with
-//! a cursor:
+//! Output is a tree of sections driven by a [`TextFormat`] cursor. Protocol and
+//! CLI callers choose a writer, open and close sections, then emit typed fields.
 //!
 //! ```
 //! use vaco_textformat::{FormatOpts, TextFormat, sections::SectionId, writers};
-//!
-//! let mut tf = TextFormat::new(
-//!     writers::make("compact").expect("known writer"),
-//!     Vec::new(),
-//!     FormatOpts::default(),
-//! );
+//! let mut tf = TextFormat::new(writers::make("compact").unwrap(), Vec::new(), FormatOpts::default());
 //! tf.open(SectionId::ROOT)?;
 //! tf.open(SectionId::STREAMS)?;
 //! tf.open(SectionId::STREAM)?;
 //! tf.int("index", 0)?;
 //! tf.str("codec_name", "aac")?;
-//! tf.close()?; // stream
-//! tf.close()?; // streams
-//! tf.close()?; // root
+//! tf.close()?;
+//! tf.close()?;
+//! tf.close()?;
 //! assert_eq!(tf.finish()?, b"stream|index=0|codec_name=aac\n");
 //! # Ok::<(), vaco_core::Error>(())
 //! ```
 //!
-//! Three things are load-bearing and easy to get wrong:
+//! The field type, not its value, decides [`TextFormat::int`] versus
+//! [`TextFormat::str`]; emission order is call order; and only [`num`] formats
+//! numbers. These are observable output contracts, not interchangeable helpers.
 //!
-//! * **[`TextFormat::int`] versus [`TextFormat::str`] is a property of the
-//!   field, not of the value.** It is what makes `json` print `"channels": 1`
-//!   next to `"sample_rate": "44100"`, and what makes `flat` print `index=0`
-//!   next to `size="258"`. There is no rule to derive it from; the caller's
-//!   field table decides.
-//! * **Emission order is call order.** Nothing in this crate sorts, and nothing
-//!   here may hold output in a map.
-//! * **Only [`num`] formats a number.** Anything else drifts.
+//! # Writers and verification
 //!
-//! # What each writer is
-//!
-//! | Writer | Shape | Options |
-//! |---|---|---|
-//! | `default` | `[STREAM]` … `[/STREAM]`, `key=value` | `nokey`/`nk`, `noprint_wrappers`/`nw` |
-//! | `compact` | one line per section, `sep`-joined | `item_sep`/`s`, `nokey`/`nk`, `escape`/`e`, `print_section`/`p` |
-//! | `csv` | `compact` with `s=,`, `nk=1`, `e=csv` | same as `compact` |
-//! | `flat` | `streams.stream.0.index=0` | `sep_char`/`s`, `hierarchical`/`h` |
-//! | `ini` | `[streams.stream.0]` sections | `hierarchical`/`h` |
-//! | `json` | 4-space JSON | `compact`/`c` |
-//! | `xml` | scalars as attributes | `fully_qualified`/`q`, `xsd_strict`/`x` |
-//!
-//! All seven also accept `string_validation`/`sv` and
-//! `string_validation_replacement`/`svr`; only `xml` currently rejects
-//! anything, because only XML has characters it cannot represent.
-//!
-//! # How to change it
-//!
-//! Change nothing here without a reference run to back it. `tests/torture.rs`
-//! holds the captured bytes for one nasty string through all six writers; if a
-//! change to a writer does not move that file, it did not change behaviour, and
-//! if it does move it, the new bytes need a matching `ffprobe` invocation in
-//! the comment above them.
+//! The seven writers cover the reference's default, compact/CSV, flat, INI,
+//! JSON, and XML forms; graph-only writers serve `ffmpeg -print_graphs`.
+//! `tests/torture.rs` and the reference-output tests pin exact bytes. Any writer
+//! change needs a matching reference run before it is accepted.
 
 #![forbid(unsafe_code)]
 
