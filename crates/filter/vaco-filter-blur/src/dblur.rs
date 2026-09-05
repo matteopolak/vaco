@@ -39,6 +39,10 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 
 use crate::common;
 
+// Keep the shared sampler available for the other directional-sampling path
+// while this hot loop uses its precomputed equivalent.
+const _: fn(&[&[u8]], f64, f64, i32, i32) -> f64 = common::sample_bilinear;
+
 const VIDEO_PAD: &[Pad] = &[Pad {
     name: "default",
     media_type: MediaType::Video,
@@ -81,20 +85,29 @@ fn blur_plane(rows: &[&[u8]], w: i32, h: i32, angle_deg: f64, radius: f64) -> Ve
     let theta = angle_deg.to_radians();
     let (dy, dx) = theta.sin_cos();
     let taps = radius.ceil() as i32;
+    let span = usize::try_from(taps.saturating_mul(2).saturating_add(1)).unwrap_or(0);
+    let x_samples = axis_samples(w, dx, taps);
+    let y_samples = axis_samples(h, dy, taps);
     let mut out = Vec::new();
     for y in 0..h {
         let mut row = Vec::new();
         for x in 0..w {
             let mut sum = 0.0;
             let mut count = 0.0;
-            for t in -taps..=taps {
+            let x_base = usize::try_from(x).unwrap_or(0) * span;
+            let y_base = usize::try_from(y).unwrap_or(0) * span;
+            for (tap, t) in (-taps..=taps).enumerate() {
                 let step = f64::from(t);
                 if step.abs() > radius {
                     continue;
                 }
-                let sx = f64::from(x) + dx * step;
-                let sy = f64::from(y) + dy * step;
-                sum += common::sample_bilinear(rows, sx, sy, w, h);
+                let Some(x_sample) = x_samples.get(x_base + tap) else {
+                    continue;
+                };
+                let Some(y_sample) = y_samples.get(y_base + tap) else {
+                    continue;
+                };
+                sum += bilinear_sample(rows, *x_sample, *y_sample);
                 count += 1.0;
             }
             let value = if count > 0.0 {
@@ -107,6 +120,61 @@ fn blur_plane(rows: &[&[u8]], w: i32, h: i32, angle_deg: f64, radius: f64) -> Ve
         out.push(row);
     }
     out
+}
+
+#[derive(Clone, Copy)]
+struct AxisSample {
+    left: usize,
+    right: usize,
+    fraction: f64,
+}
+
+fn axis_samples(length: i32, step: f64, taps: i32) -> Vec<AxisSample> {
+    let mut samples = Vec::new();
+    for coordinate in 0..length {
+        for tap in -taps..=taps {
+            let position = f64::from(coordinate) + step * f64::from(tap);
+            let floor = position.floor();
+            let index = floor as i32;
+            let max = length.saturating_sub(1).max(0);
+            samples.push(AxisSample {
+                left: usize::try_from(index.clamp(0, max)).unwrap_or(0),
+                right: usize::try_from(index.saturating_add(1).clamp(0, max)).unwrap_or(0),
+                fraction: position - floor,
+            });
+        }
+    }
+    samples
+}
+
+fn bilinear_sample(rows: &[&[u8]], x: AxisSample, y: AxisSample) -> f64 {
+    let p00 = f64::from(
+        rows.get(y.left)
+            .and_then(|row| row.get(x.left))
+            .copied()
+            .unwrap_or(0),
+    );
+    let p10 = f64::from(
+        rows.get(y.left)
+            .and_then(|row| row.get(x.right))
+            .copied()
+            .unwrap_or(0),
+    );
+    let p01 = f64::from(
+        rows.get(y.right)
+            .and_then(|row| row.get(x.left))
+            .copied()
+            .unwrap_or(0),
+    );
+    let p11 = f64::from(
+        rows.get(y.right)
+            .and_then(|row| row.get(x.right))
+            .copied()
+            .unwrap_or(0),
+    );
+    let top = p00 * (1.0 - x.fraction) + p10 * x.fraction;
+    let bottom = p01 * (1.0 - x.fraction) + p11 * x.fraction;
+    top * (1.0 - y.fraction) + bottom * y.fraction
 }
 
 #[derive(Debug)]
