@@ -793,7 +793,9 @@ Named so the demuxer's author knows what is not here:
   resolution cannot choose the first of two conflicting locations. `ipma`
   accepts only its version `0`/`1` item-ID layouts, requires
   strictly increasing association IDs, and refuses its invalid zero property
-  index. Association IDs may still name ordered entity groups, not only
+  index. `iref` permits at most one record for a `(reference type, source
+  item)` pair, keeping a derived item's reference graph unambiguous.
+  Association IDs may still name ordered entity groups, not only
   `iinf` items. The item resolver also checks each association
   against the available `ipco` property list. The item resolver discards an
   item with an essential property whose type it cannot apply; a malformed

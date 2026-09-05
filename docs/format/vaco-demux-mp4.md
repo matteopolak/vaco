@@ -826,7 +826,8 @@ crate decides what becomes a stream:
   duplicate `iloc` item ID likewise refuses the item file rather than letting
   first-match range resolution select arbitrary item bytes. An
   ordered association may still name an entity group rather than an `iinf`
-  item. An essential property the resolver cannot
+  item. Duplicate `dimg` records from one grid are malformed rather than an
+  invitation to select the first tile graph. An essential property the resolver cannot
   apply discards only its associated item. Exactly one `ispe` supplies each
   item's size; an item with no `pasp`
   reports `sample_aspect_ratio 1:1` (measured — the reference prints `1:1`

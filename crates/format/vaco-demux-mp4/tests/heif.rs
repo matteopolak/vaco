@@ -70,6 +70,14 @@ fn heif_with_grid_clap(clap_values: [u32; 8]) -> Vec<u8> {
 }
 
 fn heif_with_grid_clap_and_tile_b_width(clap_values: [u32; 8], tile_b_width: u32) -> Vec<u8> {
+    heif_with_grid_clap_and_tile_b_width_and_dimg_count(clap_values, tile_b_width, 1)
+}
+
+fn heif_with_grid_clap_and_tile_b_width_and_dimg_count(
+    clap_values: [u32; 8],
+    tile_b_width: u32,
+    dimg_count: usize,
+) -> Vec<u8> {
     let ftyp = bx(
         b"ftyp",
         &[b"mif1".as_slice(), &0u32.to_be_bytes(), b"mif1", b"jpeg"].concat(),
@@ -100,7 +108,12 @@ fn heif_with_grid_clap_and_tile_b_width(clap_values: [u32; 8], tile_b_width: u32
             .flat_map(|v| v.to_be_bytes())
             .collect::<Vec<_>>(),
     );
-    let iref = fullbx(b"iref", 0, 0, &[dimg, thmb].concat());
+    let mut iref_children = Vec::new();
+    for _ in 0..dimg_count {
+        iref_children.extend_from_slice(&dimg);
+    }
+    iref_children.extend_from_slice(&thmb);
+    let iref = fullbx(b"iref", 0, 0, &iref_children);
     // ipco: 1 = tile A ispe 16x8, 2 = grid ispe 30x8 (cropped from 32x8),
     // 3 = thumb ispe 4x2, 4 = the grid's clean aperture, 5 = tile B ispe.
     let ipco = bx(
@@ -332,6 +345,20 @@ fn a_grid_with_multiple_ispe_properties_is_refused() {
     assert!(
         demux.stream_groups().is_empty(),
         "a grid has exactly one spatial-extents property"
+    );
+}
+
+#[test]
+fn duplicate_grid_dimg_records_refuse_the_ambiguous_group() {
+    let demux = open(heif_with_grid_clap_and_tile_b_width_and_dimg_count(
+        [26, 1, 6, 1, 1, 1, 0, 1],
+        16,
+        2,
+    ));
+    assert_eq!(demux.streams().len(), 3, "coded items remain reachable");
+    assert!(
+        demux.stream_groups().is_empty(),
+        "duplicate dimg records must not select an arbitrary tile graph"
     );
 }
 

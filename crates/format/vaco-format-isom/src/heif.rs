@@ -381,6 +381,11 @@ pub fn parse_iref(iref: &IsoBox<'_>) -> Vec<ItemReference> {
         if r.overrun() {
             continue;
         }
+        if out.iter().any(|reference: &ItemReference| {
+            reference.kind == child.kind() && reference.from_item_id == from_item_id
+        }) {
+            return Vec::new();
+        }
         out.push(ItemReference {
             kind: child.kind(),
             from_item_id,
@@ -872,6 +877,18 @@ mod tests {
         record.extend_from_slice(&2u16.to_be_bytes()); // reference_count
         record.extend_from_slice(&2u16.to_be_bytes());
         let mut body = 0u32.to_be_bytes().to_vec(); // version/flags
+        body.extend_from_slice(&bx(b"dimg", &record));
+        let raw = bx(b"iref", &body);
+        assert!(parse_iref(&first_box(&raw)).is_empty());
+    }
+
+    #[test]
+    fn iref_refuses_duplicate_type_and_source() {
+        // One item and reference type have one record collecting every target.
+        // Two records would make a first-match reference resolver ambiguous.
+        let record = [0, 1, 0, 1, 0, 2];
+        let mut body = 0u32.to_be_bytes().to_vec(); // version/flags
+        body.extend_from_slice(&bx(b"dimg", &record));
         body.extend_from_slice(&bx(b"dimg", &record));
         let raw = bx(b"iref", &body);
         assert!(parse_iref(&first_box(&raw)).is_empty());
