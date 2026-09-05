@@ -66,6 +66,20 @@ checks candidate pixels against the former per-pixel baseline at all three
 sizes, then emits a ten-round alternating baseline/candidate timing at 640x480
 before `divan` reports its distributions.
 
+The validated interior-row path is also dispatched through `vaco-simd`. It
+computes the rounded byte averages, derives the motion mask lanewise,
+and selects the blended or spatial candidate without a branch per pixel;
+short rows and malformed views retain the scalar fallback. On this
+Apple-silicon host, ten alternating release rounds at 640x480 measured
+598,721 ns for the former scalar row walk and 23,675 ns for the dispatched
+path (25.289x). Divan's medians were 526.6 us versus 22.74 us at 640x480,
+and 3.636 ms versus 144.6 us at 1920x1080. The SIMD result matched the scalar
+reference for mixed motion-mask lanes at `VACO_TIER=scalar`, `sse2`, `sse4.2`,
+`avx2`, and `avx512`; the full crate's 72 tests, including all four FFmpeg
+oracle comparisons, passed. This is a measured throughput result, not a
+retired-instruction claim; no trustworthy cycle counter was available in this
+run.
+
 ## `vaco-filter-vdsp`: extended, not duplicated
 
 The row's dependency column calls for `vdsp`. `idet` and `fieldmatch` both
@@ -248,8 +262,8 @@ out explicitly rather than silently accepted.
 ## Dependencies
 
 `vaco-core`, `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
-`vaco-filter-graph`, `vaco-filter-vdsp` (extended by this crate, see
-above).
+`vaco-filter-graph`, `vaco-filter-vdsp` (extended by this crate, see above),
+and `vaco-simd` for the dispatched interior motion-adaptive row kernel.
 
 ## Fuzzing
 

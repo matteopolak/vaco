@@ -16,6 +16,7 @@ vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 vaco-filter-vdsp = { path = "../../filter/vaco-filter-vdsp" }
+vaco-simd = { path = "../../core/vaco-simd" }
 smallvec.workspace = true
 
 [dev-dependencies]

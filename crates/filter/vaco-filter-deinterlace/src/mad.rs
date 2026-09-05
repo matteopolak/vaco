@@ -28,6 +28,8 @@ use vaco_core::{Error, Result};
 use vaco_filter_core::FilterContext;
 use vaco_filter_core::adapt::{FrameFilter, FrameOut};
 use vaco_frame::{Frame, FrameData, FramePool};
+use vaco_simd::prelude::*;
+use vaco_simd::{Caps, dispatch_kernel, ops};
 
 use crate::video::{alloc_like, copy_row, dims, ensure_addressable, is_tff};
 
@@ -177,6 +179,76 @@ fn blend_full_rows(
     u8::try_from(value.min(255)).unwrap_or(255)
 }
 
+/// Vector form of [`blend_full_rows`]. The motion gate is a lane mask, so the
+/// scalar branchy decision becomes one unconditional candidate calculation
+/// followed by a native select. The scalar tail remains in the caller.
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    reason = "the dispatched body must inline for target features; n is the native lane count and full bounds every chunk"
+)]
+fn blend_full_rows_simd<S: Lanes>(
+    simd: S,
+    cur_above: &[u8],
+    cur_below: &[u8],
+    prev_above: &[u8],
+    prev_below: &[u8],
+    next_above: &[u8],
+    next_below: &[u8],
+    dst: &mut [u8],
+) {
+    let n = <S::u8s as SimdBase<S>>::N;
+    let full = (dst.len() / n) * n;
+    let threshold = <S::u8s as SimdBase<S>>::splat(simd, 4);
+    let mut x = 0;
+    while x < full {
+        let ca = <S::u8s as SimdBase<S>>::from_slice(simd, &cur_above[x..x + n]);
+        let cb = <S::u8s as SimdBase<S>>::from_slice(simd, &cur_below[x..x + n]);
+        let pa = <S::u8s as SimdBase<S>>::from_slice(simd, &prev_above[x..x + n]);
+        let pb = <S::u8s as SimdBase<S>>::from_slice(simd, &prev_below[x..x + n]);
+        let na = <S::u8s as SimdBase<S>>::from_slice(simd, &next_above[x..x + n]);
+        let nb = <S::u8s as SimdBase<S>>::from_slice(simd, &next_below[x..x + n]);
+        let spatial = ops::simd::rounded_avg_u8::<S, S::u8s>(ca, cb);
+        let prev = ops::simd::rounded_avg_u8::<S, S::u8s>(pa, pb);
+        let next = ops::simd::rounded_avg_u8::<S, S::u8s>(na, nb);
+        let temporal = ops::simd::rounded_avg_u8::<S, S::u8s>(prev, next);
+        let blended = ops::simd::rounded_avg_u8::<S, S::u8s>(temporal, spatial);
+        let motion = ops::simd::abs_diff_u8::<S, S::u8s>(prev, next);
+        let selected = ops::simd::select_u8::<S>(motion.simd_le(threshold), blended, spatial);
+        selected.store_slice(&mut dst[x..x + n]);
+        x += n;
+    }
+    for x in full..dst.len() {
+        dst[x] = blend_full_rows(
+            cur_above, cur_below, prev_above, prev_below, next_above, next_below, x,
+        );
+    }
+}
+
+fn blend_full_rows_dispatch(
+    caps: Caps,
+    cur_above: &[u8],
+    cur_below: &[u8],
+    prev_above: &[u8],
+    prev_below: &[u8],
+    next_above: &[u8],
+    next_below: &[u8],
+    dst: &mut [u8],
+) {
+    dispatch_kernel!(caps, s => blend_full_rows_simd(
+        s,
+        cur_above,
+        cur_below,
+        prev_above,
+        prev_below,
+        next_above,
+        next_below,
+        dst
+    ));
+}
+
 /// Deinterlace one frame: rows matching `parity_tff` are copied from `cur`
 /// verbatim (genuine), the others are recomputed via [`blend_rows`] using
 /// `prev`/`next` as temporal references where available.
@@ -189,6 +261,17 @@ pub(crate) fn deinterlace_frame(
     cur: &Frame,
     next: Option<&Frame>,
     parity_tff: bool,
+) -> Result<Frame> {
+    deinterlace_frame_with_caps(pool, prev, cur, next, parity_tff, Caps::detect())
+}
+
+fn deinterlace_frame_with_caps(
+    pool: &FramePool,
+    prev: Option<&Frame>,
+    cur: &Frame,
+    next: Option<&Frame>,
+    parity_tff: bool,
+    caps: Caps,
 ) -> Result<Frame> {
     let Some((format, width, height)) = dims(cur) else {
         return Err(Error::Unsupported("deinterlacing needs a video frame"));
@@ -251,11 +334,16 @@ pub(crate) fn deinterlace_frame(
             if let Some((cur_above, cur_below, prev_above, prev_below, next_above, next_below)) =
                 full_rows
             {
-                for (x, dst) in dst_row.iter_mut().take(cols).enumerate() {
-                    *dst = blend_full_rows(
-                        cur_above, cur_below, prev_above, prev_below, next_above, next_below, x,
-                    );
-                }
+                blend_full_rows_dispatch(
+                    caps,
+                    cur_above,
+                    cur_below,
+                    prev_above,
+                    prev_below,
+                    next_above,
+                    next_below,
+                    dst_row.get_mut(..cols).unwrap_or(&mut []),
+                );
             } else {
                 for (x, dst) in dst_row.iter_mut().take(cols).enumerate() {
                     *dst = blend_rows(
@@ -543,6 +631,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn dispatched_interior_kernel_matches_scalar_reference() {
+        const WIDTH: usize = 67;
+        let row = |seed: u8, scale: u8| {
+            (0..WIDTH)
+                .map(|x| {
+                    let x = u8::try_from(x % 256).unwrap();
+                    seed.wrapping_add(x.wrapping_mul(scale))
+                })
+                .collect::<Vec<_>>()
+        };
+        let cur_above = row(7, 3);
+        let cur_below = row(41, 5);
+        let prev_above = row(19, 7);
+        let prev_below = row(83, 11);
+        let next_above = prev_above
+            .iter()
+            .enumerate()
+            .map(|(x, &v)| v.wrapping_add(if x.is_multiple_of(2) { 2 } else { 32 }))
+            .collect::<Vec<_>>();
+        let next_below = prev_below
+            .iter()
+            .enumerate()
+            .map(|(x, &v)| v.wrapping_add(if x.is_multiple_of(2) { 2 } else { 32 }))
+            .collect::<Vec<_>>();
+        let mut dispatched = vec![0; WIDTH];
+        let mut scalar = vec![0; WIDTH];
+        blend_full_rows_dispatch(
+            Caps::detect(),
+            &cur_above,
+            &cur_below,
+            &prev_above,
+            &prev_below,
+            &next_above,
+            &next_below,
+            &mut dispatched,
+        );
+        for (x, dst) in scalar.iter_mut().enumerate() {
+            *dst = blend_full_rows(
+                &cur_above,
+                &cur_below,
+                &prev_above,
+                &prev_below,
+                &next_above,
+                &next_below,
+                x,
+            );
+        }
+        assert_eq!(dispatched, scalar);
     }
 
     #[test]
