@@ -185,6 +185,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
+    use vaco_filter_graph::registry::FilterRegistry;
 
     #[test]
     fn intent_names_are_the_scale_intents() {
@@ -223,6 +224,22 @@ mod tests {
         assert_eq!(filter.peak, 100);
         assert_eq!(filter.scale_options.intent, RenderingIntent::Perceptual);
         assert_eq!(filter.scale_options.lut3d_size, 33);
+    }
+
+    #[test]
+    fn color_registry_constructs_the_public_tonemap_name() {
+        let registry = crate::ColorRegistry;
+        let instance = registry
+            .create(&Instantiate {
+                name: "tonemap",
+                instance: "tonemap",
+                args: None,
+                arguments: &[],
+            })
+            .unwrap();
+        assert_eq!(instance.desc.name, "tonemap");
+        assert_eq!(instance.formats.inputs.len(), 1);
+        assert_eq!(instance.formats.outputs.len(), 1);
     }
 
     #[test]
