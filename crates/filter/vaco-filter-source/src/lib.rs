@@ -61,3 +61,27 @@ mod rng;
 pub mod registry;
 
 pub use registry::GeneratorRegistry;
+
+/// Convert a finite media duration into source frames without an intermediate
+/// floating-point seconds value.
+pub(crate) fn frame_budget(duration: vaco_core::Duration, rate: vaco_core::Rational) -> u64 {
+    duration
+        .to_ticks_rounding(rate.inverse(), vaco_core::Rounding::NearestAwayFromZero)
+        .and_then(|frames| u64::try_from(frames.max(0)).ok())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frame_budget;
+    use vaco_core::{Duration, Rational};
+
+    #[test]
+    fn frame_budget_retains_a_large_awkward_clock_duration() {
+        let frames = 9_007_199_254_740_993_i64;
+        let duration = Duration::from_ticks(frames, Rational::new(1_001, 30_000))
+            .unwrap_or(Duration::ZERO);
+
+        assert_eq!(frame_budget(duration, Rational::new(30_000, 1_001)), frames as u64);
+    }
+}

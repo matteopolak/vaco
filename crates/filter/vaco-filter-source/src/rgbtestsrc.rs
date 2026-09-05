@@ -216,14 +216,10 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let opts = Opts::parse(req.args)?;
     let (width, height) = opts.size;
     let rate = opts.rate.0;
-    let total_frames = if opts.duration.as_micros() < 0 {
+    let total_frames = if opts.duration < VDuration::ZERO {
         None
     } else {
-        Some(
-            (opts.duration.as_secs_f64() * rate.to_f64())
-                .round()
-                .max(0.0) as u64,
-        )
+        Some(crate::frame_budget(opts.duration, rate))
     };
     // `complement` is parsed (see the field doc) but does not change the
     // generated pattern yet.

@@ -40,6 +40,12 @@ reproduce the reference's `av_lfg` bit stream — see that module's doc, and
 resolves a `seed`, only reproducibility (same seed -> same output) is
 guaranteed, not the reference's specific sequence.
 
+Finite `duration` options become output-frame budgets through
+`frame_budget`: it converts the exact `Duration` directly into ticks of the
+inverse frame rate with nearest rounding. Do not route that calculation through
+seconds as `f64`; at large timestamps an awkward rate such as `30000/1001`
+can otherwise gain or lose a frame.
+
 Colour parsing reuses `vaco_core::parse::color` directly (the same function
 `vaco-filter-plumbing::color` uses) rather than a second colour parser.
 `vaco-filter-draw`, the plan's dedicated colour/fill crate, does not exist
@@ -100,6 +106,9 @@ probe" — see each module's doc comment for the full derivation.
   probe recipe at a second width and confirm the proportional-scaling
   assumption, or replace it with a second measured table if it does not
   hold.
+- To change duration budgeting, update `frame_budget` and its awkward-clock
+  regression together. Its rounding is the compatibility boundary shared by
+  every finite video source in this crate.
 
 ## Configuration
 
