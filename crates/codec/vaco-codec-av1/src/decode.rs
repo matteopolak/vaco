@@ -528,7 +528,8 @@ fn decode_frame(
 
     decode_tiles(&mut ctx, tile_group_payload)?;
     apply_cdef(&mut ctx, budget)?;
-    pic_to_frame(budget, seq, fh, &ctx.pic, mi_cols, mi_rows)
+    apply_superres(&mut ctx, budget)?;
+    pic_to_frame(budget, seq, fh, &ctx.pic)
 }
 
 fn apply_cdef(ctx: &mut FrameCtx, budget: &mut Budget) -> Result<()> {
@@ -650,6 +651,36 @@ fn apply_cdef(ctx: &mut FrameCtx, budget: &mut Budget) -> Result<()> {
         }
     }
     ctx.pic = filtered;
+    budget.release(source_bytes);
+    Ok(())
+}
+
+/// AV1 §7.16 comes after CDEF: samples retain their Mi padding until the
+/// resampler has consumed it for edge extension, then the output is visible
+/// frame geometry with no reconstruction padding.
+fn apply_superres(ctx: &mut FrameCtx, budget: &mut Budget) -> Result<()> {
+    if !ctx.header.size.use_superres {
+        return Ok(());
+    }
+    let source_bytes: u64 = [ctx.pic.plane(0), ctx.pic.plane(1), ctx.pic.plane(2)]
+        .into_iter()
+        .flatten()
+        .map(|plane| u64::try_from(plane.as_slice().len()).unwrap_or(0) * 2)
+        .sum();
+    let upscaled = crate::superres::upscale_picture(
+        &ctx.pic,
+        crate::superres::PictureConfig {
+            coded_width: usize::try_from(ctx.header.size.coded_width).unwrap_or(0),
+            upscaled_width: usize::try_from(ctx.header.size.upscaled_width).unwrap_or(0),
+            coded_height: usize::try_from(ctx.header.size.coded_height).unwrap_or(0),
+            subsampling_x: ctx.subsampling_x,
+            subsampling_y: ctx.subsampling_y,
+            monochrome: ctx.seq_mono,
+            bit_depth: ctx.bit_depth,
+        },
+        budget,
+    )?;
+    ctx.pic = upscaled;
     budget.release(source_bytes);
     Ok(())
 }
@@ -3267,8 +3298,6 @@ fn pic_to_frame(
     seq: &SequenceHeader,
     fh: &FrameHeader,
     pic: &Picture,
-    mi_cols: usize,
-    mi_rows: usize,
 ) -> Result<Frame> {
     let cc = &seq.color_config;
     let name = match (
@@ -3296,33 +3325,24 @@ fn pic_to_frame(
         usize::try_from(width).unwrap_or(0),
         usize::try_from(height).unwrap_or(0),
     );
-    #[allow(
-        clippy::integer_division,
-        reason = "chroma plane width/height at 4:2:0 subsampling: exact halving of the luma dimension"
-    )]
-    let cw = if cc.subsampling_x {
-        mi_cols * 4 / 2
-    } else {
-        mi_cols * 4
-    };
-    #[allow(
-        clippy::integer_division,
-        reason = "chroma plane width/height at 4:2:0 subsampling: exact halving of the luma dimension"
-    )]
-    let ch = if cc.subsampling_y {
-        mi_rows * 4 / 2
-    } else {
-        mi_rows * 4
-    };
-    blit(&pic.y, &mut frame, 0, w, h, cc.bit_depth);
+    let cw = w.div_ceil(1 << usize::from(cc.subsampling_x));
+    let ch = h.div_ceil(1 << usize::from(cc.subsampling_y));
+    blit(
+        &pic.y,
+        &mut frame,
+        0,
+        w.min(pic.y.width()),
+        h.min(pic.y.height()),
+        cc.bit_depth,
+    );
     if !cc.mono_chrome {
         if let Some(u) = &pic.u {
             blit(
                 u,
                 &mut frame,
                 1,
-                cw.min(w.div_ceil(1 + usize::from(cc.subsampling_x))),
-                ch.min(h.div_ceil(1 + usize::from(cc.subsampling_y))),
+                cw.min(u.width()),
+                ch.min(u.height()),
                 cc.bit_depth,
             );
         }
@@ -3331,8 +3351,8 @@ fn pic_to_frame(
                 v,
                 &mut frame,
                 2,
-                cw.min(w.div_ceil(1 + usize::from(cc.subsampling_x))),
-                ch.min(h.div_ceil(1 + usize::from(cc.subsampling_y))),
+                cw.min(v.width()),
+                ch.min(v.height()),
                 cc.bit_depth,
             );
         }

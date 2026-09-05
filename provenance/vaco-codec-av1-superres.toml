@@ -1,0 +1,15 @@
+[[source]]
+id = "dav1d-superres-oracle"
+title = "Observed output of dav1d scalar super-resolution resize at aa09a630ef57ee7d9482ffb7ef355a903dbb5302"
+kind = "blackbox"
+acquired = "2026-09-04"
+where = "https://github.com/videolan/dav1d/tree/aa09a630ef57ee7d9482ffb7ef355a903dbb5302"
+license = "BSD-2-Clause"
+notes = "Independent test oracle only: src/mc_tmpl.c resize_c and src/tables.c dav1d_resize_filter are extracted unchanged by scripts/gen-av1-superres-oracle.py. Production arithmetic and table derive from aom-av1-spec section 7.16."
+
+[[table]]
+name = "UPSCALE_FILTER"
+file = "crates/codec/vaco-codec-av1/src/superres.rs"
+source = "aom-av1-spec"
+clause = "§7.16, Upscale_Filter[64][8]"
+method = "transcribed"

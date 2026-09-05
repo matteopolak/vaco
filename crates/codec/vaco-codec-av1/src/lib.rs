@@ -13,9 +13,9 @@
 //! transforms, intra prediction including CFL, and CDEF filtering.
 //!
 //! Out of scope, left for later work: inter prediction, deblocking/
-//! superres/loop restoration *application* (their header syntax is parsed
-//! so the bitstream stays aligned, but the filters do not run, so output is
-//! missing those in-loop stages), film grain synthesis, frame threading/DPB, and
+//! loop restoration *application* (its header syntax is parsed so the bitstream
+//! stays aligned, but the filter does not run), film grain synthesis, frame
+//! threading/DPB, and
 //! Argon conformance. An inter frame's header is rejected with
 //! [`vaco_core::Error::Unsupported`] rather than guessed at.
 //!
@@ -39,6 +39,7 @@
 //! | [`transform`] | §7.13's inverse transforms and the 2D combine |
 //! | [`predict`] | §7.11.2 intra prediction and §7.11.5 CFL |
 //! | [`framebuf`] | The private reconstruction buffer intra prediction reads while writing (see `xtask/src/dup_check.rs`'s `DISTINCT` entries for why `vaco-codec-vp8`/`vaco-codec-vp9` have identically-named types) |
+//! | [`superres`] | §7.16 horizontal eight-tap super-resolution after CDEF |
 //! | [`decode`] | The tile/superblock/mode-info/residual walk and the [`vaco_codec_core::Decoder`] wiring |
 //!
 //! # Specification
@@ -60,6 +61,7 @@ pub mod frame_header;
 pub mod framebuf;
 pub mod predict;
 pub mod restoration;
+pub mod superres;
 pub mod symbol;
 pub mod tables;
 pub mod transform;

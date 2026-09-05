@@ -6,8 +6,9 @@ end: OBU/sequence/frame header, the symbol decoder and its adaptive CDF
 machinery, the tile/superblock/partition/mode-info walk, coefficient
 decode, dequantization, inverse transforms, and intra prediction (basic/
 Paeth, DC, smooth, directional with the intra edge filter and upsampling,
-and CFL), followed by CDEF. Inter prediction, deblocking/superres/loop restoration,
-film grain, threading/DPB management and Argon conformance are explicitly
+and CFL), followed by CDEF and scalar super-resolution. Inter prediction,
+deblocking/loop restoration, film grain, threading/DPB management and Argon
+conformance are explicitly
 out of scope — later work, other crates.
 
 ## What it is
@@ -27,6 +28,7 @@ direct decoder callers and tests use the shared symbol engine.
 | `tables.rs` + `tables/{default_cdf,scan,conversion,quant}.rs` | mechanically-extracted spec tables (default CDFs, scan orders, size/context conversion tables, quantizer lookups) |
 | `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — intra frame syntax, including retained CDEF strengths/damping and restoration modes; deblocking and film-grain parameters remain syntax-only |
 | `cdef.rs` | Direction search, constrained filtering, variance adaptation, damping, and chroma direction mapping; see [CDEF](../av1-cdef.md) for oracle coverage and remaining frame-conformance gaps |
+| `superres.rs` | AV1 §7.16's post-CDEF horizontal eight-tap upscaler; see [AV1 super-resolution](../av1-superres.md) for oracle coverage and the inter-reference boundary |
 | `transform.rs` | `Av1TxType`, `inverse_transform_2d` — the full §7.13 inverse DCT/ADST/WHT/identity transform network |
 | `predict.rs` | `predict_intra`/`predict_chroma_from_luma` — §7.11.2/§7.11.5 |
 | `framebuf.rs` | `Picture`/`Plane` — the private `u16`-backed reconstruction buffer intra prediction needs (reads already-written pixels of the buffer being written) |
@@ -52,6 +54,14 @@ reconstruction buffer, per-frame flags) and calls `decode_tiles` →
 §5.11.4) → `decode_block` (§5.11.5-9's reduced intra-only mode info) →
 `residual`/`transform_block` → `coeffs` (§5.11.39) + `reconstruct`
 (§7.12.3's dequantize/inverse-transform/add).
+
+After tile reconstruction, CDEF runs first and `superres::upscale_picture`
+runs second when the frame header sets `use_superres`; only then are the
+visible planes copied to `Frame`. The superres filter derives phase from the
+coded visible width but clamps its eight taps to the Mi-padded reconstruction
+plane, which is why it must precede that final copy. See
+[AV1 super-resolution](../av1-superres.md) for the exact oracle and table
+provenance.
 
 Since `is_inter` is always `0` here, two specification branches collapse
 away entirely and are not implemented at all: `read_block_tx_size()`'s
@@ -139,6 +149,11 @@ rather than silently dropped — see that file's own module doc.
   exist and correctly return `Error::Unsupported` by name when a real
   stream actually exercises them — implement the missing math behind that
   same call site rather than adding a new read path.
+- **Extending superres to inter frames**: implement the decoder's reference
+  store and `frame_size_with_refs()` together. AV1 §5.9.7/§6.8.6 derives the
+  referenced `UpscaledWidth` before `superres_params()`; today inter frames
+  are rejected before that syntax, so this remains explicitly unreachable
+  rather than partially guessed.
 - Do not add a comparison test without an `#[ignore]`/named-gap doc comment
   unless it actually passes — `tests/oracle.rs` is the place regressions
   and gaps both get recorded, not just the passing cases.
