@@ -26,7 +26,7 @@ pub use machine_control::{MachineCheck, MachineControlReport, verify_machine_con
 pub use macro_runner::{
     CommandTemplate, Implementation, MacroSample, MacroScenario, run_macro_scenario,
 };
-pub use resource::{ResourceObservation, parse_macos_time_l};
+pub use resource::{CommandProvenance, ResourceObservation, json_record, parse_macos_time_l};
 
 const TRAILING_BASELINES: usize = 7;
 const PERF_STAT_MIN_BATCH_NS: u64 = 20_000_000;

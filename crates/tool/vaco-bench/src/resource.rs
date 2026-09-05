@@ -13,6 +13,42 @@ pub struct ResourceObservation {
     pub peak_rss_bytes: u64,
 }
 
+/// Reproducibility fields attached to one macro child result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandProvenance {
+    /// Exact executable and arguments after placeholder substitution.
+    pub argv: Vec<String>,
+    /// First complete version/configuration record emitted by the executable.
+    pub version: String,
+}
+
+/// Render one stable JSON object without accepting unescaped command text.
+#[must_use]
+pub fn json_record(observation: ResourceObservation, provenance: &CommandProvenance) -> String {
+    let quote = |value: &str| {
+        format!(
+            "\"{}\"",
+            value
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        )
+    };
+    let argv = provenance
+        .argv
+        .iter()
+        .map(|arg| quote(arg))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"schema\":1,\"cpu_seconds\":{},\"peak_rss_bytes\":{},\"argv\":[{}],\"version\":{}}}",
+        observation.cpu_seconds,
+        observation.peak_rss_bytes,
+        argv,
+        quote(&provenance.version)
+    )
+}
+
 /// Parse the relevant macOS `/usr/bin/time -l` lines.
 ///
 /// # Errors
@@ -50,7 +86,7 @@ fn integer_before(output: &str, suffix: &str) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ResourceObservation, parse_macos_time_l};
+    use super::{CommandProvenance, ResourceObservation, json_record, parse_macos_time_l};
     #[test]
     fn parses_cpu_and_peak_rss() {
         assert_eq!(
@@ -64,5 +100,22 @@ mod tests {
     #[test]
     fn rejects_missing_fields() {
         assert!(parse_macos_time_l("0.1 user\n").is_err());
+    }
+    #[test]
+    fn record_escapes_exact_argv_and_version() {
+        let row = json_record(
+            ResourceObservation {
+                cpu_seconds: 0.1,
+                peak_rss_bytes: 2,
+            },
+            &CommandProvenance {
+                argv: vec!["vaco\"x".into()],
+                version: "vaco\nconfig".into(),
+            },
+        );
+        assert_eq!(
+            row,
+            "{\"schema\":1,\"cpu_seconds\":0.1,\"peak_rss_bytes\":2,\"argv\":[\"vaco\\\"x\"],\"version\":\"vaco\\nconfig\"}"
+        );
     }
 }
