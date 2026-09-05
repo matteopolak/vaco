@@ -129,9 +129,10 @@
 //!   preceding independent header and CABAC context, while independent
 //!   segments restart both. Multiple independent segments are decoded when
 //!   they share their picture-wide context, enable filtering across their
-//!   boundaries, and do not use WPP; WPP multi-segment combinations are
-//!   refused by name rather than decoded with the wrong neighbour
-//!   availability. The SPS/PPS ones are refused at
+//!   boundaries, and do not use WPP. Independent WPP segments are supported
+//!   when they begin and end on complete CTU rows and in-loop filtering is
+//!   disabled; dependent WPP segments and filtered WPP boundaries are refused
+//!   by name rather than decoded with the wrong neighbour availability. The SPS/PPS ones are refused at
 //!   `check_scope`; the rest the moment the bitstream actually uses the
 //!   feature, so a PPS that declares a flag it never exercises decodes fine.
 //!

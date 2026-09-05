@@ -297,7 +297,11 @@ impl HevcDecoder {
                         "vaco-codec-hevc: independent slice segments with different reference picture sets are not supported",
                     ));
                 }
-                if !matching_independent_slice_header(&hdr, &segment_hdr) {
+                if !matching_independent_slice_header(
+                    &hdr,
+                    &segment_hdr,
+                    pps.entropy_coding_sync_enabled,
+                ) {
                     return Err(Error::Unsupported(
                         "vaco-codec-hevc: independent slice segments with differing headers are not supported",
                     ));
@@ -377,13 +381,35 @@ impl HevcDecoder {
                 next_independent_start = slice_starts.get(index).copied().unwrap_or(0);
             }
         }
-        if slice_starts.len() > 1 && pps.entropy_coding_sync_enabled {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: multiple WPP slice segments are not supported",
-            ));
+        let multiple_wpp_segments = slice_starts.len() > 1 && pps.entropy_coding_sync_enabled;
+        if multiple_wpp_segments {
+            if slice_is_dependent.iter().any(|&dependent| dependent) {
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: dependent WPP slice segments are not supported",
+                ));
+            }
+            let row_aligned = slice_starts.iter().all(|&start| start % ctbs_x == 0)
+                && slice_starts
+                    .iter()
+                    .skip(1)
+                    .all(|&start| start % ctbs_x == 0)
+                && total_ctbs % ctbs_x == 0;
+            if !row_aligned {
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: WPP slice segments must start at CTU-row boundaries",
+                ));
+            }
+            if hdr.sao_luma || hdr.sao_chroma || !hdr.deblocking_filter_disabled {
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: multiple WPP slice segments with in-loop filtering are not supported",
+                ));
+            }
         }
         let multiple_independent_slices = slice_is_dependent.iter().skip(1).any(|&v| !v);
-        if multiple_independent_slices && !hdr.loop_filter_across_slices_enabled {
+        if multiple_independent_slices
+            && !multiple_wpp_segments
+            && !hdr.loop_filter_across_slices_enabled
+        {
             return Err(Error::Unsupported(
                 "vaco-codec-hevc: slice boundaries with loop filtering disabled are not supported",
             ));
@@ -606,29 +632,62 @@ impl HevcDecoder {
             // de-escaped RBSP `cabac_data` is sliced from. See
             // `decode_wpp_rows`'s own doc for why using `cabac_data`'s byte
             // positions directly under-counts every row boundary that a
-            // `00 00 03` escape happens to precede.
-            self.rbsp.fill(first_ebsp, &mut self.budget)?;
-            let rbsp = self.rbsp.as_slice();
-            let mut reader = vaco_bitstream::BitReader::new(rbsp);
-            reader.skip(16);
-            let _ = SliceHeader::parse_data(&mut reader, header, &sps, &pps, &mut self.budget)?;
-            reader.check()?;
-            reader.align();
-            let cabac_data = reader.remaining_bytes();
-            let header_rbsp_len = rbsp.len().saturating_sub(cabac_data.len());
-            decode_wpp_rows(
-                &mut self.budget,
-                first_ebsp,
-                header_rbsp_len,
-                &hdr.entry_point_offsets,
-                &mut walk,
-                ctbs_x,
-                ctbs_y,
-                ctb_size_i,
-                qp_i8,
-                hdr.kind,
-                hdr.cabac_init,
-            )?;
+            // `00 00 03` escape happens to precede. Independent WPP segments
+            // restart their context at their own row zero, so each segment's
+            // header and entry-point table is decoded separately here.
+            for (index, &ebsp) in slice_nals.iter().enumerate() {
+                let start_ctb = slice_starts.get(index).copied().ok_or(Error::InvalidData(
+                    "vaco-codec-hevc: WPP slice segment address missing while decoding",
+                ))?;
+                let end_ctb = slice_starts
+                    .get(index.saturating_add(1))
+                    .copied()
+                    .unwrap_or(total_ctbs);
+                let row_start = start_ctb.checked_div(ctbs_x).unwrap_or(0);
+                let row_count = end_ctb
+                    .saturating_sub(start_ctb)
+                    .checked_div(ctbs_x)
+                    .unwrap_or(0);
+                let segment_nal = HevcNalHeader::parse(ebsp)
+                    .ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
+                self.rbsp.fill(ebsp, &mut self.budget)?;
+                let (header_rbsp_len, parsed) = {
+                    let rbsp = self.rbsp.as_slice();
+                    let mut reader = vaco_bitstream::BitReader::new(rbsp);
+                    reader.skip(16);
+                    let parsed = SliceHeader::parse_data(
+                        &mut reader,
+                        segment_nal,
+                        &sps,
+                        &pps,
+                        &mut self.budget,
+                    )?;
+                    reader.check()?;
+                    reader.align();
+                    let cabac_data = reader.remaining_bytes();
+                    (rbsp.len().saturating_sub(cabac_data.len()), parsed)
+                };
+                if parsed.dependent {
+                    return Err(Error::Unsupported(
+                        "vaco-codec-hevc: dependent WPP slice segments are not supported",
+                    ));
+                }
+                walk.begin_slice_segment(start_ctb, end_ctb, slice_qp);
+                decode_wpp_rows(
+                    &mut self.budget,
+                    ebsp,
+                    header_rbsp_len,
+                    &parsed.entry_point_offsets,
+                    &mut walk,
+                    ctbs_x,
+                    row_start,
+                    row_count,
+                    ctb_size_i,
+                    qp_i8,
+                    parsed.kind,
+                    parsed.cabac_init,
+                )?;
+            }
         } else {
             // §9.3.2.1 starts a fresh arithmetic decoding engine for every
             // segment, but §9.3.2.5 synchronizes a dependent segment's CABAC
@@ -921,12 +980,18 @@ fn new_context_bank(kind: SliceKind, cabac_init: bool, qp: i8) -> ContextBank {
 }
 
 /// Whether two independent segment headers can share this decoder's one
-/// picture-wide CTU context.  The segment position is deliberately ignored:
+/// picture-wide CTU context. The segment position is deliberately ignored:
 /// §7.4.7.1 permits each independent segment to name its own raster CTB
 /// address. `cabac_init_flag` is likewise per-segment: the caller constructs
-/// each segment's fresh CABAC context bank from its own value. Every remaining
-/// field that affects the picture-wide CTU context must agree.
-fn matching_independent_slice_header(first: &SliceHeader, candidate: &SliceHeader) -> bool {
+/// each segment's fresh CABAC context bank from its own value. WPP entry-point
+/// offsets are also per-segment, so they may differ when the caller explicitly
+/// permits that shape. Every remaining field that affects the picture-wide CTU
+/// context must agree.
+fn matching_independent_slice_header(
+    first: &SliceHeader,
+    candidate: &SliceHeader,
+    allow_distinct_entry_points: bool,
+) -> bool {
     if !same_short_term_rps(
         first.short_term_rps.as_ref(),
         candidate.short_term_rps.as_ref(),
@@ -943,7 +1008,16 @@ fn matching_independent_slice_header(first: &SliceHeader, candidate: &SliceHeade
     normalized.short_term_ref_pic_set_sps = first.short_term_ref_pic_set_sps;
     normalized.short_term_ref_pic_set_idx = first.short_term_ref_pic_set_idx;
     normalized.short_term_rps.clone_from(&first.short_term_rps);
-    first == &normalized
+    if allow_distinct_entry_points {
+        normalized.entry_point_offsets.clear();
+    }
+    if allow_distinct_entry_points {
+        let mut first_without_entry_points = first.clone();
+        first_without_entry_points.entry_point_offsets.clear();
+        first_without_entry_points == normalized
+    } else {
+        first == &normalized
+    }
 }
 
 /// Whether two headers derive the same picture-level short-term RPS.
@@ -1001,7 +1075,7 @@ mod slice_rps_tests {
             ..SliceHeader::default()
         };
 
-        assert!(matching_independent_slice_header(&first, &candidate));
+        assert!(matching_independent_slice_header(&first, &candidate, false));
     }
 
     #[test]
@@ -1025,7 +1099,28 @@ mod slice_rps_tests {
             ..SliceHeader::default()
         };
 
-        assert!(!matching_independent_slice_header(&first, &candidate));
+        assert!(!matching_independent_slice_header(
+            &first, &candidate, false
+        ));
+    }
+
+    #[test]
+    fn independent_wpp_segments_ignore_their_local_entry_point_lengths() {
+        let first = SliceHeader {
+            first_slice_segment_in_pic: true,
+            entry_point_offsets: vec![1526],
+            ..SliceHeader::default()
+        };
+        let candidate = SliceHeader {
+            slice_segment_address: 8,
+            entry_point_offsets: vec![677],
+            ..SliceHeader::default()
+        };
+
+        assert!(!matching_independent_slice_header(
+            &first, &candidate, false
+        ));
+        assert!(matching_independent_slice_header(&first, &candidate, true));
     }
 }
 
@@ -1115,10 +1210,12 @@ fn ebsp_offset_for_rbsp_len(ebsp: &[u8], rbsp_target_len: usize) -> usize {
 /// (`vaco_bitstream::annexb::to_rbsp`) before a fresh [`CabacDecoder`] reads
 /// it: the arithmetic-decoding engine always reinitialises at a substream's
 /// first byte (clause 9.3.1.2's own init, same as slice start), but the
-/// *context* state does not — row 0 starts from the same
+/// *context* state does not — the segment's first row starts from the same
 /// `new_context_bank(kind, cabac_init, qp)` a non-WPP slice would, while
 /// every later row either inherits a saved snapshot or, if no snapshot is
-/// available, also starts fresh.
+/// available, also starts fresh. `row_start` and `row_count` identify the
+/// segment's raster-row window, so an independent WPP segment's local row zero
+/// is not mistaken for picture row zero.
 ///
 /// The snapshot a row inherits is the context state as it stood **right
 /// after the row above finished decoding its own second CTU**, column index
@@ -1139,7 +1236,8 @@ fn decode_wpp_rows(
     entry_point_offsets: &[u32],
     walk: &mut Ctx<'_>,
     ctbs_x: u32,
-    ctbs_y: u32,
+    row_start: u32,
+    row_count: u32,
     ctb_size_i: i32,
     qp: i8,
     kind: SliceKind,
@@ -1147,7 +1245,12 @@ fn decode_wpp_rows(
 ) -> Result<()> {
     let data_start = ebsp_offset_for_rbsp_len(ebsp, header_rbsp_len);
     let ebsp_slice_data = ebsp.get(data_start..).unwrap_or(&[]);
-    let row_ranges = wpp_row_ranges(budget, ebsp_slice_data.len(), entry_point_offsets, ctbs_y)?;
+    let row_ranges = wpp_row_ranges(
+        budget,
+        ebsp_slice_data.len(),
+        entry_point_offsets,
+        row_count,
+    )?;
     // `row_ranges` is pure per-slice working state — nothing outside the row
     // loop below ever reads it again. Its charge is released unconditionally
     // once that loop (moved into `decode_wpp_row_ranges` for exactly this
@@ -1168,6 +1271,7 @@ fn decode_wpp_rows(
         ebsp_slice_data,
         walk,
         ctbs_x,
+        row_start,
         ctb_size_i,
         qp,
         kind,
@@ -1191,12 +1295,13 @@ fn decode_wpp_row_ranges(
     ebsp_slice_data: &[u8],
     walk: &mut Ctx<'_>,
     ctbs_x: u32,
+    row_start: u32,
     ctb_size_i: i32,
     qp: i8,
     kind: SliceKind,
     cabac_init: bool,
 ) -> Result<()> {
-    // Row r's own context state, as it stood right after CTU column 1
+    // The local row's own context state, as it stood right after CTU column 1
     // finished (§9.3.2.3) -- published once per row into a fixed-size board
     // (Stage 2b step 2, `docs/codec/hevc-wavefront-threading.md`: the same
     // `RowPublish` primitive `EdgeMarks`/`SaoParamsGrid`/`CuGrid` already
@@ -1215,6 +1320,8 @@ fn decode_wpp_row_ranges(
     let mut row_rbsp: Vec<u8> = Vec::new();
 
     for (row_idx, &(start, end)) in row_ranges.iter().enumerate() {
+        let row_u32 = row_start.saturating_add(u32::try_from(row_idx).unwrap_or(0));
+        let row_us = usize::try_from(row_u32).unwrap_or(usize::MAX);
         let row_ebsp = ebsp_slice_data.get(start..end).ok_or(Error::InvalidData(
             "vaco-codec-hevc: entry point range out of bounds",
         ))?;
@@ -1229,9 +1336,9 @@ fn decode_wpp_row_ranges(
         // that function's own QG-reset comment), so nothing else needs
         // resetting here.
         walk.qp_y_prev = walk.shared.slice_qp;
-        walk.edges.begin_row(row_idx)?;
-        walk.cu_grid.begin_row(budget, row_idx)?;
-        walk.sao_params.begin_row(budget, row_idx)?;
+        walk.edges.begin_row(row_us)?;
+        walk.cu_grid.begin_row(budget, row_us)?;
+        walk.sao_params.begin_row(budget, row_us)?;
         let mut ctx = if row_idx > 0 && ctbs_x >= 2 {
             // Row `row_idx - 1`'s own publish, from this same loop's
             // previous iteration -- always `Some` by construction (every
@@ -1246,16 +1353,15 @@ fn decode_wpp_row_ranges(
             new_context_bank(kind, cabac_init, qp)
         };
 
-        let row_u32 = u32::try_from(row_idx).unwrap_or(0);
         let mut stop = false;
         for col in 0..ctbs_x {
             let col_us = usize::try_from(col).unwrap_or(0);
-            walk.recon.begin_ctu(row_idx, col_us)?;
+            walk.recon.begin_ctu(row_us, col_us)?;
             let addr = row_u32.saturating_mul(ctbs_x).saturating_add(col);
             let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
-            let cy = i32::try_from(row_idx).unwrap_or(0) * ctb_size_i;
+            let cy = i32::try_from(row_u32).unwrap_or(0) * ctb_size_i;
             ctu::decode_ctu(&mut cabac, &mut ctx, walk, cx, cy, addr)?;
-            walk.recon.publish_ctu(row_idx, col_us)?;
+            walk.recon.publish_ctu(row_us, col_us)?;
 
             // §9.3.2.3: the context state is stored once a row's own second
             // CTU (column index 1) has finished, for the row below to load —

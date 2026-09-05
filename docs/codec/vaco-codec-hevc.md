@@ -380,11 +380,13 @@ and neighbour availability across its boundary. This follows §6.3.1,
 a new unavailable-neighbour range.
 
 The supported shape requires matching picture-wide decoding fields for every
-independent segment, `slice_loop_filter_across_slices_enabled_flag` when there
-is more than one independent slice, and no WPP or tiles. WPP multi-segment
-pictures, tile pictures, loop-filter-disabled independent-slice boundaries,
-and independent headers requiring distinct picture-wide context remain named
-refusals.
+independent segment and `slice_loop_filter_across_slices_enabled_flag` when
+there is more than one independent non-WPP slice. Independent WPP segments are
+also supported when every segment begins and ends on a complete CTU-row
+boundary and both SAO and deblocking are disabled. WPP segments that inherit a
+dependent header, split a CTU row, or need in-loop filtering across their
+boundary remain named refusals, as do tile pictures and independent headers
+requiring distinct picture-wide context.
 
 JCT-VC `HRD_A_Fujitsu_3` exercises four raster-contiguous independent row
 segments per 416x240 picture; its vendored stream has 96 yuv420p frames and
@@ -837,6 +839,27 @@ non-WPP byte-exact paths (`tests/oracle.rs::dense_content_is_byte_exact`,
 and the same real-binary check with `wpp=0`) are unchanged.
 
 `check_scope` no longer refuses `entropy_coding_sync_enabled_flag`.
+
+### Independent WPP slice segments — bounded row-aligned shape
+
+Independent WPP segments carry their own `entry_point_offsets` table. Those
+offsets count only the segment's coded row substreams, so two otherwise
+matching headers may legitimately contain different offset values or even a
+different number of entries. The decoder now compares the shared picture state
+while ignoring that per-segment table, then decodes each segment's local row
+window at its actual raster-row origin. Each segment restarts CABAC from its
+own header, while rows within that segment retain the existing §9.3.2.3
+second-CTU context handoff.
+
+The checked-in `tests/wpp_multislice.rs` fixture is a real two-frame 256x256
+`libx265` stream with `wpp=1:slices=2:no-sao=1:no-deblock=1`. Each picture has
+two independent segments covering two complete CTU rows each. The stream is
+11,927 bytes with SHA-256
+`75dbd6e7e7659e26de62c96ff03b8e219ea2fc8107e69e5895a7df5adaba9354`; black-box
+`ffmpeg` decoding yields exactly 196,608 visible bytes with MD5
+`138d30492cca3f85709c514b8b4d9bac`, and Vaco matches both the frame count and
+the digest. Filtered or non-row-aligned multi-segment WPP remains refused by
+name because its neighbour and in-loop-filter state needs a separate proof.
 
 ## Tile pictures — named refusal verified by a real two-column stream
 
@@ -1441,7 +1464,10 @@ screen-content-coding extensions, and tiles. Long-term reference pictures
 Dependent and independent multi-segment pictures are assembled by the
 constraints described above; only multi-segment WPP, tile pictures, and
 independent segments with a genuinely different picture-level RPS or other
-unsupported decoding state remain named refusals.
+unsupported decoding state remain named refusals. The supported WPP
+multi-segment subset is limited to independent, row-aligned segments with SAO
+and deblocking disabled; dependent or filtered WPP combinations remain
+refused.
 
 ## The `Budget::release` leak past 640x480, found and fixed
 
