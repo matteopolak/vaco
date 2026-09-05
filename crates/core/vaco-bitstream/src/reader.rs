@@ -390,11 +390,10 @@ impl<'a> BitReader<'a> {
     ///
     /// # Note
     ///
-    /// Unlike the sketch in `planning/11-foundations.md` §8.4 this takes `&self`
-    /// and does not clear. Clearing is meaningless once overrun is derived from
-    /// the position — the position stays past the end — and would in any case
-    /// hide a truncation from the next caller, which is the opposite of what a
-    /// parser wants.
+    /// This takes `&self` and does not clear. Clearing is meaningless once
+    /// overrun is derived from the position — the position stays past the end
+    /// — and would hide a truncation from the next caller, which is the
+    /// opposite of what a parser wants.
     pub const fn check(&self) -> Result<()> {
         if self.overrun() {
             return Err(BitstreamError::Overrun);

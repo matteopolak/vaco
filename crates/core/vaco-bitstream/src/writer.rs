@@ -50,10 +50,9 @@ impl BitWriter {
     ///
     /// # Note
     ///
-    /// `planning/11-foundations.md` §8.5 sketches this as `with_capacity(n:
-    /// usize)`. It cannot be: `clippy.toml` denies `Vec::with_capacity` so that
-    /// every input-derived allocation goes through a budget, and an encoder
-    /// sizing its output from a decoded frame header is exactly that case.
+    /// It takes a [`Budget`] rather than a raw `usize` so every input-derived
+    /// allocation goes through a budget; an encoder sizing its output from a
+    /// decoded frame header is exactly that case.
     ///
     /// # Errors
     ///
