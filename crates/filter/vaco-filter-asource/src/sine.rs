@@ -222,14 +222,10 @@ impl SourceFilter for Source {
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
     let sample_rate = u32::try_from(opts.sample_rate.max(1)).unwrap_or(44100);
-    let total_samples = if opts.duration.as_micros() <= 0 {
+    let total_samples = if opts.duration <= VDuration::ZERO {
         None
     } else {
-        Some(
-            (opts.duration.as_secs_f64() * f64::from(sample_rate))
-                .round()
-                .max(0.0) as u64,
-        )
+        Some(crate::sample_budget(opts.duration, sample_rate))
     };
     let block: u32 = opts
         .samples_per_frame

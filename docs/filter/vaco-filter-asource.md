@@ -24,6 +24,10 @@ finishing it would take.
 
 ## How it works
 
+Finite `duration` options become sample budgets through exact `Duration` to
+`1/sample_rate` tick conversion with nearest rounding, rather than through
+floating-point seconds.
+
 One module per filter, each exposing `pub const DESC: FilterDesc` and a
 crate-private `create`, dispatched by `registry::AsourceRegistry`. Every
 filter is a `SourceFilter` wrapped in `vaco_filter_core::adapt::Sourced`.

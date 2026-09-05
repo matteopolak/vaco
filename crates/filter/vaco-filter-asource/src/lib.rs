@@ -43,3 +43,29 @@ mod window;
 pub mod registry;
 
 pub use registry::AsourceRegistry;
+
+/// Convert a finite media duration into source samples without floating-point
+/// clock arithmetic.
+pub(crate) fn sample_budget(duration: vaco_core::Duration, sample_rate: u32) -> u64 {
+    let rate = i32::try_from(sample_rate.max(1)).unwrap_or(1);
+    duration
+        .to_ticks_rounding(
+            vaco_core::Rational::new(1, rate),
+            vaco_core::Rounding::NearestAwayFromZero,
+        )
+        .and_then(|samples| u64::try_from(samples.max(0)).ok())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use vaco_core::{Duration, Rational};
+
+    #[test]
+    fn sample_budget_retains_a_large_awkward_clock_duration() {
+        let samples = 9_007_199_254_740_993_i64;
+        let duration = Duration::from_ticks(samples, Rational::new(1, 48_000))
+            .unwrap_or(Duration::ZERO);
+        assert_eq!(super::sample_budget(duration, 48_000), samples as u64);
+    }
+}
