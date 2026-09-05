@@ -1,105 +1,29 @@
 //! Shared video kernels that cross filter-crate boundaries.
 //!
-//! Plan `16-filters.md` SS4.1 places `scene_sad` here because it is used by
-//! `framerate` (motion), `freezedetect` (temporal), `identity`/`msad`
-//! (analysis), `minterpolate` (motion), `scdet` (analysis) and `select`
-//! (multimedia) — filters that land in five different category crates. This
-//! crate did not exist yet when `vaco-filter-temporal` (GitHub #475) needed
-//! `scene_sad` for `decimate`, `mpdecimate` and `freezedetect`, so it is
-//! created here, minimally, rather than duplicating the kernel inside that
-//! crate (D19: one definition per concept). Whoever implements `framerate`'s
-//! real motion-compensated blend, `scdet`, `identity`/`msad` or
-//! `minterpolate` should extend this crate rather than re-deriving the same
-//! sum, and `edge_common`/`motion_estimation`/the box-blur core/`transform`
-//! (the rest of plan SS4.1's `vdsp` kernel set) still need to be added here by
-//! whichever agent needs them first.
+//! This crate centralizes kernels used by filters in different category crates,
+//! keeping one definition per concept. Current consumers use byte-oriented
+//! planes, so the APIs are 8-bit; add `u16` variants only when a caller needs
+//! them.
 //!
-//! # What is here
+//! # Kernels
 //!
-//! [`plane_sad`] — the sum of absolute per-sample differences between two
-//! same-sized 8-bit planes, with an `f64` normalisation
-//! ([`normalised_sad`]) to a `0.0..=1.0` "fraction of full-scale difference"
-//! scale, and [`block_sad`] for the same sum restricted to one rectangular
-//! block, which `decimate` and `mpdecimate` need for their per-block metric.
+//! - [`plane_sad`], [`normalised_sad`], and [`block_sad`]:
+//!   absolute-difference metrics.
+//! - [`comb_score`]: a vertical second-difference combing metric.
+//! - [`plane_sse`]: a squared-difference metric for per-component MSE.
+//! - [`identical_count`]: an exact-match fraction.
+//! - [`affine`], [`integral`], and [`motion`]: geometric warp, summed-area
+//!   tables, and filter-side block search.
 //!
-//! # Why 8-bit only, for now
+//! `comb_score` is an original metric: it measures one frame's vertical
+//! structure rather than comparing two frames. `motion` delegates per-block
+//! SAD to `vaco-codec-dsp-mecmp`; the filter-side search remains distinct from
+//! the codec encoder's rate-distortion search.
 //!
-//! Every filter that needs this today (`decimate`, `mpdecimate`,
-//! `freezedetect`) is being written against `vaco-filter-temporal`'s own
-//! byte-oriented plane access, which itself only handles 8-bit samples
-//! cleanly without a depth parameter. A `u16` variant is a mechanical
-//! addition (same loop, `u16` accumulator) whenever a caller needs one — not
-//! a redesign — so it is left until there is a real caller rather than
-//! speculatively generalised now.
-//!
-//! # 2026-08-23 addition: `comb_score`
-//!
-//! `vaco-filter-deinterlace` (plan 16 SS4.3, the FT-4.12 long tail, #480)
-//! needs a per-frame "how combed is this" metric for `idet` and
-//! `fieldmatch` — a different question from `plane_sad`'s "how different
-//! are these two whole planes", since combing is a property of **one**
-//! frame's own vertical structure (its rows alternate between two
-//! temporally-offset fields), not a comparison between two frames. Per this
-//! crate's own invitation to extend rather than duplicate (see this
-//! module's opening paragraph), [`comb_score`] is added here: the sum of
-//! absolute vertical second differences, `|row[y-1] - 2*row[y] +
-//! row[y+1]|`, which is small for smooth (progressive) vertical structure
-//! and large where alternating rows disagree (interlaced motion). This is
-//! an original metric — not a transcription of the reference's own
-//! (GPL, unread) interlace-detection formula — and `vaco-filter-deinterlace`
-//! documents it as such.
-//!
-//! # 2026-08-28 addition: [`affine`], [`integral`], [`motion`] (GitHub #459/#460)
-//!
-//! Plan SS4.1's row also lists `edge_common`, the box-blur core, morphology's
-//! neighbourhood reduction and 1D/3D LUT sampling. **All four already have a
-//! real, measured, tested implementation elsewhere in this tree**, written
-//! before this crate existed to hold a shared copy:
-//!
-//! - `edge_common` (the Sobel/Prewitt/Scharr two-gradient engine): `vaco-filter-convolve::edge`,
-//!   including a differential-tested border rule (`reflect-101`, corrected
-//!   2026-08-28 from an earlier, insufficiently-tested "replicate" guess —
-//!   see that module's own doc for the two-axis probe that told them apart).
-//! - The box-blur core: `vaco-filter-blur::common::box_pass`, with a measured
-//!   replicate border and — a real subtlety a naive shared version would
-//!   miss — `boxblur` rounds to nearest while `avgblur` truncates the same
-//!   division.
-//! - Morphology's neighbourhood reduction: `vaco-filter-convolve::morph`
-//!   (`dilation`/`erosion`'s shared engine, with a measured `coordinates`
-//!   bitmask and a `threshold` cap) and `::morpho` (the two-input
-//!   structuring-element generalisation).
-//! - 1D/3D LUT sampling: `vaco-filter-lut::lut1d`/`lut3d::Cube3d` (trilinear;
-//!   `tetrahedral` is a documented, not-yet-implemented gap there).
-//!
-//! Adding a second copy of any of these here — before a caller *outside*
-//! those crates actually needs one — is exactly what this crate's own
-//! opening paragraph and `cargo xtask dup-check` (D19) warn against: a
-//! kernel with no second caller is untested by construction, and the first
-//! draft of this addition did exactly that for `edge_common` and the
-//! box-blur core before the collision was caught by inspection rather than
-//! by tooling (dup-check only catches type-name collisions, not two
-//! functions with different names computing the same thing). The real
-//! remaining work item is a **consolidation migration** — moving those four
-//! into this crate and updating their three owning crates to depend on it —
-//! which is out of scope for whoever does not own those crates; see this
-//! batch's own report for the details.
-//!
-//! [`affine`] (geometric warp) and [`integral`] (summed-area tables) have no
-//! such prior implementation anywhere in the tree, so they are added here
-//! directly.
-//!
-//! `motion_estimation` and "SAD/hadamard (pixelutils)" are **not**
-//! reimplemented here either, for the D19 reason stated above rather than
-//! the "already exists elsewhere" one: `vaco-codec-dsp-mecmp` (#144, D-12)
-//! already owns SAD/SSD/variance/SATD as vectorised kernels for the
-//! codec-encoder motion search. [`motion`] is a thin filter-side block
-//! search built by *calling* that crate's `sad`, for callers (`deshake`'s
-//! feature tracking, `minterpolate`'s motion field) that need "find the
-//! best match nearby", not the encoder's rate-distortion search —
-//! `vaco-codec-dsp-me` (#260, D-13) is that search and did not exist yet
-//! when this was written; when it lands, a filter that wants RDO-aware
-//! search should call it instead of [`motion`], which stays for the
-//! simpler "cheapest good match" case.
+//! Existing edge, blur, morphology, and LUT kernels stay in their owning crates
+//! until an external caller needs shared versions. Duplicating them here would
+//! create an untested second implementation; migration requires coordinated
+//! ownership changes.
 #![forbid(unsafe_code)]
 
 pub mod affine;
@@ -232,14 +156,8 @@ pub fn comb_score(plane: PlaneRef<'_>) -> u64 {
 /// planes (the overlap of their geometry, as [`plane_sad`]), the numerator
 /// `vaco-filter-analysis`'s `psnr` needs for its per-component MSE.
 ///
-/// # 2026-08-23 addition
-///
-/// `vaco-filter-analysis` (plan 16 SS4.3, GitHub #477) needs a sum-of-
-/// squares reduction for `psnr`'s MSE, which is a different reduction from
-/// [`plane_sad`]'s sum-of-absolute-differences — squaring changes which
-/// differences dominate, so it is not expressible as a post-hoc transform of
-/// the existing sum. Added here per this crate's own invitation to extend
-/// rather than duplicate.
+/// Squaring changes which differences dominate, so this reduction is not
+/// expressible as a post-hoc transform of [`plane_sad`].
 ///
 /// # Independent oracle
 ///
