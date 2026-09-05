@@ -1,6 +1,5 @@
-//! `signalstats` — per-frame pixel-value statistics. One video pad in, one
-//! out, plus `stat`/`out`/`color` options for highlighting features this
-//! crate does not implement.
+//! `signalstats` — per-frame pixel-value statistics. One video pad in and out;
+//! `stat`/`out`/`color` options highlight features this crate does not implement.
 //!
 //! # Scope
 //!
