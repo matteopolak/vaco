@@ -391,6 +391,27 @@ impl TileLayout {
         row.checked_mul(self.num_columns)?.checked_add(column)
     }
 
+    /// Return tile `id`'s half-open CTB rectangle `(x0, x1, y0, y1)`.
+    ///
+    /// Tile IDs use the tile-scan order: columns within a tile row, then tile
+    /// rows. This is also the ordering of tiles-only CABAC substreams.
+    #[must_use]
+    pub fn tile_rect(&self, id: u32) -> Option<(u32, u32, u32, u32)> {
+        let row = id.checked_div(self.num_columns)?;
+        let column = id.checked_rem(self.num_columns)?;
+        if row >= self.num_rows {
+            return None;
+        }
+        let column_index = usize::try_from(column).ok()?;
+        let row_index = usize::try_from(row).ok()?;
+        Some((
+            *self.column_boundaries.get(column_index)?,
+            *self.column_boundaries.get(column_index.checked_add(1)?)?,
+            *self.row_boundaries.get(row_index)?,
+            *self.row_boundaries.get(row_index.checked_add(1)?)?,
+        ))
+    }
+
     /// Return the number of tile-local CABAC substreams in a full picture.
     ///
     /// With WPP disabled, one substream covers each tile in tile-scan order;

@@ -1,8 +1,10 @@
-//! Tile-picture scope boundary against a real HM 18.0 Annex-B stream.
+//! One-row tile reconstruction against a real HM 18.0 Annex-B stream.
 //!
 //! The fixture is one 512x64 IDR picture with two uniform tile columns. Its
-//! PPS must carry `tiles_enabled_flag = 1`; the decoder must then refuse the
-//! picture by the named scope error before tile-partitioned reconstruction.
+//! PPS carries `tiles_enabled_flag = 1` and one independent tile substream per
+//! uniform column. The decoder reconstructs this one-CTB-high shape through
+//! its ordinary coding/transform walk while keeping taller and WPP tile shapes
+//! explicitly out of scope.
 //! The 1,813-byte HM 18.0 stream has SHA-256
 //! `e7ede7ded9e07974097809c4bacda3492a6634a216a8d8b5c8920a3ceb3c91f2`.
 //! A black-box `ffmpeg` decode is 49,152 visible yuv420p bytes with MD5
@@ -11,6 +13,7 @@
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
+    clippy::integer_division,
     clippy::panic,
     clippy::unwrap_used,
     reason = "test code over one fixed, checked-in conformance-shaped fixture"
@@ -22,12 +25,17 @@ use vaco_codec_core::Decoder;
 use vaco_codec_hevc::{HevcDecoder, TileLayout};
 use vaco_core::Error;
 use vaco_format_nalu::{Framing, RbspBuf, units};
+use vaco_hash::HashAlgo;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_parse_hevc::pps::Tiles;
 use vaco_parse_hevc::{HevcNalHeader, HevcParser, SliceHeader};
 
 const HEVC: &[u8] = include_bytes!("fixtures/tiles_512x64.hevc");
+const REF: &[u8] = include_bytes!("fixtures/tiles_512x64_ref.yuv");
+const WIDTH: usize = 512;
+const HEIGHT: usize = 64;
+const OFFICIAL_MD5: &str = "6ccc33b0cd92240a275d30a05de031cc";
 
 fn packet(bytes: &[u8]) -> Packet {
     let mut budget = Budget::new(Limits::default());
@@ -35,8 +43,8 @@ fn packet(bytes: &[u8]) -> Packet {
 }
 
 #[test]
-fn tile_pps_is_rejected_by_name_before_cabac_decode() {
-    let limits = Limits::default();
+fn one_row_tiled_picture_matches_ffmpeg_bytes() {
+    let limits = Limits::permissive();
     let mut parser = HevcParser::new(limits.clone());
     let info = parser
         .push_access_unit(HEVC, Framing::AnnexB)
@@ -52,13 +60,33 @@ fn tile_pps_is_rejected_by_name_before_cabac_decode() {
     assert!(tiles.uniform_spacing);
 
     let mut decoder = HevcDecoder::new(limits);
-    let error = decoder
+    decoder
         .send_packet(Some(&packet(HEVC)))
-        .expect_err("tile pictures must remain out of scope");
-    assert!(matches!(
-        error,
-        Error::Unsupported("vaco-codec-hevc: tiles are not supported")
-    ));
+        .expect("one-row tiled picture decodes");
+    decoder.send_packet(None).expect("decoder drain");
+    let mut got = Vec::new();
+    while let Ok(frame) = decoder.receive_frame() {
+        let vaco_frame::FrameData::Video { width, height, .. } = &frame.data else {
+            panic!("expected a video frame");
+        };
+        assert_eq!((*width as usize, *height as usize), (WIDTH, HEIGHT));
+        for (plane_index, (width, height)) in [
+            (0, (WIDTH, HEIGHT)),
+            (1, (WIDTH / 2, HEIGHT / 2)),
+            (2, (WIDTH / 2, HEIGHT / 2)),
+        ] {
+            let plane = frame.plane(plane_index).expect("plane present");
+            for y in 0..height {
+                got.extend_from_slice(&plane.row(y).expect("row in range")[..width]);
+            }
+        }
+    }
+    assert_eq!(got.len(), 49_152);
+    assert_eq!(
+        HashAlgo::Md5.digest_hex(&got).as_deref(),
+        Some(OFFICIAL_MD5)
+    );
+    assert_eq!(got, REF);
 }
 
 #[test]
@@ -86,6 +114,9 @@ fn tile_pps_maps_raster_ctbs_and_blocks_cross_tile_neighbours() {
     assert_eq!(layout.tile_at(3, 0), Some(0));
     assert_eq!(layout.tile_at(4, 0), Some(1));
     assert_eq!(layout.tile_at(7, 0), Some(1));
+    assert_eq!(layout.tile_rect(0), Some((0, 4, 0, 1)));
+    assert_eq!(layout.tile_rect(1), Some((4, 8, 0, 1)));
+    assert_eq!(layout.tile_rect(2), None);
     assert_eq!(layout.tile_substream_count(), Some(2));
     assert_eq!(layout.entry_point_offset_count(false), Some(1));
     assert_eq!(layout.tile_local_ctb_address(0, 0), Some((0, 0)));

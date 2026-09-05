@@ -17,8 +17,8 @@ landed" below), per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see
 weighted prediction (§8.5.3.3.4.3, see "Weighted prediction
 (§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Filter
 suppression for protected I_PCM and transquant-bypass CUs shares one per-CU
-mask. Tiles and every range-extension feature are explicitly out of scope —
-see "What was cut" below. I_PCM is implemented both
+mask. One-row, filtering-disabled tiles are decoded; other tile shapes and
+every range-extension feature remain out of scope — see "What was cut" below. I_PCM is implemented both
 with and without per-CU loop-filter suppression.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
@@ -172,7 +172,8 @@ own decode of the same file byte-for-byte, per plane, end to end.
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, SPS/PPS range extensions, SCC
-extensions and tiles. Neither I_PCM (including
+extensions and all tile shapes outside the bounded one-row, filtering-disabled
+tiles-only path. Neither I_PCM (including
 `pcm_loop_filter_disabled_flag`), transform skip, deblocking, SAO,
 `cu_qp_delta_enabled`, P-slices, B-slices, nor
 weighted (uni- or bi-predictive) prediction are on this list any more.
@@ -202,7 +203,7 @@ module doc).
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (tiles — inter prediction (P- and B-slices),
+- **Extending scope** (tile shapes beyond the bounded one-row path — inter prediction (P- and B-slices),
   deblocking, SAO, WPP, `cu_qp_delta` and weighted (uni- and bi-predictive)
   prediction are done, see their own sections above): the corresponding
   SPS/PPS fields already correctly return `Error::Unsupported` by name in
@@ -954,65 +955,26 @@ decodes to exactly 7,188,480 yuv420p bytes. Vaco matches the archive's
 `e067aa3a6a12cd5743849ded793c8d3f` MD5 and every Y, U, and V byte. Other
 unproven non-row-aligned boundaries remain named refusals.
 
-## Tile pictures — named refusal verified by a real two-column stream
+## One-row tile reconstruction
 
-Tiles remain out of scope for reconstruction and filtering because the CTU walk
-must apply §6.5's tile-local neighbour-availability state; treating a tile
-boundary as a slice boundary would emit wrong intra references and loop-filter
-decisions. The decoder now derives that prerequisite geometry in
-`TileLayout::from_pps`: uniform spacing uses the specified floor boundary
-formula, explicit PPS widths/heights consume all but the final extent, and
-left/above neighbours at a tile edge are unavailable. This derivation is
-validated before the unchanged named refusal, so no unproven cross-tile sample
-can reach CABAC, reconstruction, deblocking, or SAO. The refusal is covered by
-`tests/tiles.rs` with a real HM 18.0 Main-profile
-Annex-B fixture: one 512x64 IDR picture, two uniform tile columns, WPP off,
-SAO and deblocking off. The test first parses the PPS and asserts
-`tiles_enabled_flag`, `num_tile_columns_minus1 + 1 == 2`, and one tile row,
-then checks the 8-CTB raster map (`0..3 -> tile 0`, `4..7 -> tile 1`) and the
-cross-column neighbour boundary. It also checks that the picture has two
-tile-local substreams, one entry-point offset, and that tile-local CTB
-addresses reset at the column boundary and that each tile's first CTB starts a
-fresh tile-local CABAC state. It also parses the real slice header
-and maps its one coded-byte entry-point length to the two half-open tile-scan
-ranges, then calls `TileLayout::initialize_first_tile_cabac` to validate the
-first tile's §9.3.1.2 arithmetic initializer without consuming a CTB bin. The
-same check is also applied to every tile range by
-`TileLayout::initialize_tile_cabac_substreams`, proving both independent
-arithmetic state boundaries in this stream. The follow-on
-`TileLayout::initialize_tile_cabac_states` step derives one fresh §9.3.2.2
-context bank from the parsed `SliceQPY` for each range; it still consumes no
-CTB syntax. Because this stream's first CTB in each tile is full-sized and
-above `MinCbLog2SizeY`, the test then consumes exactly the context-0
-`split_cu_flag` required by §7.3.8.4 in each tile; both measured flags are 1,
-then consumes the top-left child split flag under the same proven conditions;
-both measured child flags are also 1. It then consumes the top-left grandchild
-flag: the measured values are `(1, 0)` for tiles 0 and 1 respectively, and no
-later CTB syntax is consumed. Tile 0's split grandchild then exposes the
-minimum-size top-left leaf: its context-0 `part_mode` bin is 0, measured as
-`PART_NxN`; its first 4x4 PU then has a context-0
-`prev_intra_luma_pred_flag` of 1. Tile 1 refuses both leaf steps because its
-grandchild did not split. No remaining PU, MPM, prediction, transform, or
-reconstruction syntax is consumed. For tile 0, the first bypass-coded
-all four `prev_intra_luma_pred_flag` bins are consumed before any MPM/rem-mode
-payload, as §7.3.8.5 requires. The subsequent PU payloads resolve through the
-tile-local §8.4.2 neighbour lists to `[PLANAR, INTRA_ANGULAR10, INTRA_VER,
-INTRA_VER]` (modes `[0, 10, 26, 26]`). Its one-per-CU chroma mode then resolves
-to `INTRA_PLANAR` (mode 0). Transform and reconstruction syntax remain
-unconsumed. Finally it sends the same access unit to `HevcDecoder` and
-requires exactly
-`Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before the
-decoder consumes tile CABAC for reconstruction. This keeps the parser's
-§7.3.2.3 tile syntax and the
-decoder's §6.5 geometry and §7.4.7.1 substream count exercised without
-allowing a decoder path that has not implemented cross-tile filtering.
+`TileLayout` validates the PPS geometry and maps tile IDs to half-open CTB
+rectangles. The decoder accepts one independent, full-picture tiles-only slice
+whose picture is exactly one CTB row high and whose deblocking and SAO are
+disabled. It partitions the escaped slice payload at §7.4.7.1 entry points,
+de-escapes each tile range independently, and initializes fresh arithmetic and
+CABAC context state for every tile. CTUs then use the normal coding and
+transform-tree reconstruction path; `Ctx` narrows syntax-neighbour availability
+to the active tile without resetting the slice QP predictor.
 
-The checked-in stream is 1,813 bytes with SHA-256
-`e7ede7ded9e07974097809c4bacda3492a6634a216a8d8b5c8920a3ceb3c91f2`.
-Independent black-box `ffmpeg` decoding produces 49,152 visible yuv420p bytes
-with MD5 `6ccc33b0cd92240a275d30a05de031cc`; the output is recorded to make
-the fixture's geometry and reference decode measurable even though Vaco
-correctly emits no frame for it.
+The fixture in `tests/tiles.rs` is a 1,813-byte 512x64 HM 18.0 IDR with two
+uniform tile columns. It validates the geometry and CABAC boundaries, then
+decodes the whole access unit and compares the 49,152 visible yuv420p bytes
+byte-for-byte with an independently generated ffmpeg reference (MD5
+`6ccc33b0cd92240a275d30a05de031cc`).
+
+Taller tile pictures, multiple or dependent tile slices, tiles combined with
+WPP, and tile pictures requiring deblocking or SAO remain named refusals. Their
+row-publication/filtering rules must be integrated before extending this scope.
 
 ## Per-CU QP delta (`cu_qp_delta`), landed
 

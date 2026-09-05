@@ -170,6 +170,9 @@ pub(crate) struct Ctx<'p, 'c, 's, 'r> {
     /// them already (H.265 §6.4.1).
     slice_start_ctb: u32,
     slice_end_ctb: u32,
+    /// Optional tile-local CTB rectangle. When present, a syntax neighbour
+    /// must be both in the slice segment and in this tile.
+    tile_ctb_rect: Option<(u32, u32, u32, u32)>,
     /// §8.6.1's `qPY_PRED` for the *current* quantisation group, cached at
     /// the QG's own reset ([`coding_quadtree`]) rather than recomputed per
     /// coding unit, since it is a pure function of the QG's own position and
@@ -445,6 +448,7 @@ impl<'p, 'c, 's, 'r> Ctx<'p, 'c, 's, 'r> {
             qp_y_prev: slice_qp,
             slice_start_ctb: 0,
             slice_end_ctb: u32::MAX,
+            tile_ctb_rect: None,
             qg_qp_pred: slice_qp,
             is_cu_qp_delta_coded: false,
             cu_qp_delta_val: 0,
@@ -495,6 +499,7 @@ impl<'p, 'c, 's, 'r> Ctx<'p, 'c, 's, 'r> {
             qp_y_prev: self.qp_y_prev,
             slice_start_ctb: self.slice_start_ctb,
             slice_end_ctb: self.slice_end_ctb,
+            tile_ctb_rect: self.tile_ctb_rect,
             qg_qp_pred: self.qg_qp_pred,
             is_cu_qp_delta_coded: self.is_cu_qp_delta_coded,
             cu_qp_delta_val: self.cu_qp_delta_val,
@@ -544,11 +549,27 @@ impl<'p, 'c, 's, 'r> Ctx<'p, 'c, 's, 'r> {
     pub(crate) fn begin_slice_segment(&mut self, start_ctb: u32, end_ctb: u32, slice_qp: i32) {
         self.slice_start_ctb = start_ctb;
         self.slice_end_ctb = end_ctb;
+        self.tile_ctb_rect = None;
         self.qp_y_prev = slice_qp;
         self.qg_qp_pred = slice_qp;
         self.is_cu_qp_delta_coded = false;
         self.cu_qp_delta_val = 0;
         self.cu_transquant_bypass = false;
+    }
+
+    /// Start one tile-local substream within the current slice segment.
+    ///
+    /// The CABAC caller resets its arithmetic/context state separately. Tile
+    /// boundaries do not reset the slice's QP predictor, so this only narrows
+    /// spatial-neighbour availability.
+    pub(crate) fn begin_tile_substream(
+        &mut self,
+        ctb_x_start: u32,
+        ctb_x_end: u32,
+        ctb_y_start: u32,
+        ctb_y_end: u32,
+    ) {
+        self.tile_ctb_rect = Some((ctb_x_start, ctb_x_end, ctb_y_start, ctb_y_end));
     }
 
     /// Whether a picture-coordinate neighbour belongs to this segment.
@@ -567,7 +588,11 @@ impl<'p, 'c, 's, 'r> Ctx<'p, 'c, 's, 'r> {
         let addr = ctb_y
             .saturating_mul(self.shared.ctbs_x)
             .saturating_add(ctb_x);
-        addr >= self.slice_start_ctb && addr < self.slice_end_ctb
+        if addr < self.slice_start_ctb || addr >= self.slice_end_ctb {
+            return false;
+        }
+        self.tile_ctb_rect
+            .is_none_or(|(x0, x1, y0, y1)| ctb_x >= x0 && ctb_x < x1 && ctb_y >= y0 && ctb_y < y1)
     }
 }
 
