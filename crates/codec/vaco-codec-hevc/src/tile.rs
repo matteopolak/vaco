@@ -36,6 +36,7 @@ pub struct TileCabacState<'a> {
     first_ctb_split: Option<bool>,
     first_ctb_child_split: Option<bool>,
     first_ctb_grandchild_split: Option<bool>,
+    first_ctb_leaf_nxn: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -223,7 +224,46 @@ impl TileCabacState<'_> {
             .ok_or(Error::InvalidData(
                 "vaco-codec-hevc: part_mode context is missing",
             ))?;
-        Ok(self.cabac.decode_decision(context) == 0)
+        let is_nxn = self.cabac.decode_decision(context) == 0;
+        self.first_ctb_leaf_nxn = Some(is_nxn);
+        Ok(is_nxn)
+    }
+
+    /// Decode the first 4x4 PU's `prev_intra_luma_pred_flag`.
+    ///
+    /// A minimum-size intra leaf with `PART_NxN` has four PUs. This consumes
+    /// only the first flag, before any MPM or rem-mode syntax, as required by
+    /// §7.3.8.5. The flag uses the first initialized context entry, matching
+    /// the decoder's intra-CU path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] when the leaf was not
+    /// established as `PART_NxN`, and [`vaco_core::Error::InvalidData`] for
+    /// inconsistent leaf dimensions.
+    pub fn decode_first_ctb_leaf_prev_intra_luma_pred_flag(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<bool> {
+        if self.first_ctb_leaf_nxn != Some(true) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile leaf has no NxN intra PU flags",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        let context = self
+            .contexts
+            .prev_intra_luma_pred
+            .first_mut()
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: prev_intra_luma_pred context is missing",
+            ))?;
+        Ok(self.cabac.decode_decision(context) != 0)
     }
 }
 
@@ -491,6 +531,7 @@ impl TileLayout {
                 first_ctb_split: None,
                 first_ctb_child_split: None,
                 first_ctb_grandchild_split: None,
+                first_ctb_leaf_nxn: None,
             });
         }
         Ok(states)

@@ -324,6 +324,27 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         second_leaf_error,
         Error::Unsupported("vaco-codec-hevc: first tile grandchild leaf parent is not split")
     ));
+    let first_prev_intra_flag = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_leaf_prev_intra_luma_pred_flag(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile NxN leaf carries a prev-intra flag");
+    assert!(first_prev_intra_flag);
+    let second_prev_intra_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_leaf_prev_intra_luma_pred_flag(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no NxN leaf PU flags");
+    assert!(matches!(
+        second_prev_intra_error,
+        Error::Unsupported("vaco-codec-hevc: first tile leaf has no NxN intra PU flags")
+    ));
     let cabac = layout
         .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
         .expect("first tile CABAC state initializes");

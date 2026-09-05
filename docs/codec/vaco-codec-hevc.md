@@ -990,9 +990,11 @@ both measured child flags are also 1. It then consumes the top-left grandchild
 flag: the measured values are `(1, 0)` for tiles 0 and 1 respectively, and no
 later CTB syntax is consumed. Tile 0's split grandchild then exposes the
 minimum-size top-left leaf: its context-0 `part_mode` bin is 0, measured as
-`PART_NxN`; tile 1 refuses this leaf step because its grandchild did not split.
-No prediction, transform, or reconstruction syntax is consumed. Finally it
-sends the same access unit to `HevcDecoder` and
+`PART_NxN`; its first 4x4 PU then has a context-0
+`prev_intra_luma_pred_flag` of 1. Tile 1 refuses both leaf steps because its
+grandchild did not split. No remaining PU, MPM, prediction, transform, or
+reconstruction syntax is consumed. Finally it sends the same access unit to
+`HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before the
 decoder consumes tile CABAC for reconstruction. This keeps the parser's
