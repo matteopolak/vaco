@@ -131,7 +131,9 @@
 //!   they share their picture-wide context, enable filtering across their
 //!   boundaries, and do not use WPP. Independent WPP segments are supported
 //!   when they begin and end on complete CTU rows; dependent WPP segments
-//!   inherit slice syntax while each row keeps WPP's context reset, and
+//!   inherit slice syntax, CABAC context, and the running QP predictor across a
+//!   bounded two-CTU-wide partial-row shape, while each new row keeps WPP's
+//!   context reset, and
 //!   filtered boundaries are accepted only when cross-slice filtering is
 //!   enabled. Other WPP boundaries are refused by name rather than decoded
 //!   with the wrong neighbour availability. The SPS/PPS ones are refused at

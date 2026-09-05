@@ -392,7 +392,19 @@ impl HevcDecoder {
                     .skip(1)
                     .all(|&start| start % ctbs_x == 0)
                 && total_ctbs % ctbs_x == 0;
-            if !row_aligned {
+            // The only non-row-aligned shape proven against a conformance
+            // oracle is WPP-E: the first row is split at CTB 1, and every
+            // later segment starts on a complete row. Keep any other partial
+            // row refused until it has its own exact fixture.
+            let bounded_partial_row = ctbs_x == 2
+                && slice_starts.first().copied() == Some(0)
+                && slice_starts.get(1).copied() == Some(1)
+                && total_ctbs % ctbs_x == 0
+                && slice_starts
+                    .iter()
+                    .skip(2)
+                    .all(|&start| start % ctbs_x == 0);
+            if !row_aligned && !bounded_partial_row {
                 return Err(Error::Unsupported(
                     "vaco-codec-hevc: WPP slice segments must start at CTU-row boundaries",
                 ));
@@ -639,6 +651,7 @@ impl HevcDecoder {
             let mut active_slice_kind = hdr.kind;
             let mut active_cabac_init = hdr.cabac_init;
             let mut active_slice_qp = slice_qp;
+            let mut wpp_context: Option<ContextBank> = None;
             for (index, &ebsp) in slice_nals.iter().enumerate() {
                 let start_ctb = slice_starts.get(index).copied().ok_or(Error::InvalidData(
                     "vaco-codec-hevc: WPP slice segment address missing while decoding",
@@ -648,10 +661,14 @@ impl HevcDecoder {
                     .copied()
                     .unwrap_or(total_ctbs);
                 let row_start = start_ctb.checked_div(ctbs_x).unwrap_or(0);
-                let row_count = end_ctb
-                    .saturating_sub(start_ctb)
-                    .checked_div(ctbs_x)
-                    .unwrap_or(0);
+                let first_col = start_ctb.checked_rem(ctbs_x).unwrap_or(0);
+                let row_count = first_col
+                    .saturating_add(end_ctb.saturating_sub(start_ctb))
+                    .div_ceil(ctbs_x);
+                let last_col = end_ctb
+                    .checked_rem(ctbs_x)
+                    .filter(|&col| col != 0)
+                    .unwrap_or(ctbs_x);
                 let segment_nal = HevcNalHeader::parse(ebsp)
                     .ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
                 self.rbsp.fill(ebsp, &mut self.budget)?;
@@ -702,7 +719,10 @@ impl HevcDecoder {
                     );
                     (segment_qp, parsed.kind, parsed.cabac_init)
                 };
-                decode_wpp_rows(
+                if !parsed.dependent {
+                    wpp_context = None;
+                }
+                wpp_context = decode_wpp_rows(
                     &mut self.budget,
                     ebsp,
                     header_rbsp_len,
@@ -711,10 +731,14 @@ impl HevcDecoder {
                     ctbs_x,
                     row_start,
                     row_count,
+                    first_col,
+                    last_col,
                     ctb_size_i,
                     i8::try_from(segment_qp.clamp(0, 51)).unwrap_or(0),
                     segment_kind,
                     segment_cabac_init,
+                    wpp_context,
+                    parsed.dependent && first_col != 0,
                 )?;
             }
         } else {
@@ -1228,12 +1252,12 @@ mod slice_rps_tests {
 /// `entry_point_offsets` (§7.4.7.1's `entry_point_offset_minus1[i] + 1`,
 /// already resolved to lengths by `vaco_parse_hevc::SliceHeader`).
 ///
-/// This crate refuses WPP pictures with more than one slice segment and never
-/// has tiles, so — unlike the general
-/// `numEntryPointOffsets` derivation, which also has to account for tile
-/// columns — one CTU row is exactly one substream here: `ctbs_y` rows need
-/// `ctbs_y - 1` entry points (the last row's length is whatever remains).
-/// A stream whose count disagrees is rejected rather than guessed at.
+/// This tile-free decoder supports the bounded WPP shapes admitted by
+/// `check_scope`; unlike the general `numEntryPointOffsets` derivation, which
+/// also has to account for tile columns, one CTU row is exactly one substream
+/// here: `ctbs_y` rows need `ctbs_y - 1` entry points (the last row's length is
+/// whatever remains). A stream whose count disagrees is rejected rather than
+/// guessed at.
 fn wpp_row_ranges(
     budget: &mut Budget,
     data_len: usize,
@@ -1310,12 +1334,14 @@ fn ebsp_offset_for_rbsp_len(ebsp: &[u8], rbsp_target_len: usize) -> usize {
 /// (`vaco_bitstream::annexb::to_rbsp`) before a fresh [`CabacDecoder`] reads
 /// it: the arithmetic-decoding engine always reinitialises at a substream's
 /// first byte (clause 9.3.1.2's own init, same as slice start), but the
-/// *context* state does not — the segment's first row starts from the same
-/// `new_context_bank(kind, cabac_init, qp)` a non-WPP slice would, while
-/// every later row either inherits a saved snapshot or, if no snapshot is
-/// available, also starts fresh. `row_start` and `row_count` identify the
-/// segment's raster-row window, so an independent WPP segment's local row zero
-/// is not mistaken for picture row zero.
+/// *context* state does not — an independent segment's first row starts from
+/// the same `new_context_bank(kind, cabac_init, qp)` a non-WPP slice would,
+/// while a dependent segment continues the preceding segment's context. Every
+/// later WPP row inherits a saved snapshot or, if no snapshot is available,
+/// also starts fresh. A dependent segment that continues within a row also
+/// carries `qPY_PREV`; `row_start` and `row_count` identify the segment's
+/// raster-row window, so an independent WPP segment's local row zero is not
+/// mistaken for picture row zero.
 ///
 /// The snapshot a row inherits is the context state as it stood **right
 /// after the row above finished decoding its own second CTU**, column index
@@ -1338,19 +1364,24 @@ fn decode_wpp_rows(
     ctbs_x: u32,
     row_start: u32,
     row_count: u32,
+    first_col: u32,
+    last_col: u32,
     ctb_size_i: i32,
     qp: i8,
     kind: SliceKind,
     cabac_init: bool,
-) -> Result<()> {
+    seed_context: Option<ContextBank>,
+    preserve_first_row_qp: bool,
+) -> Result<Option<ContextBank>> {
     let data_start = ebsp_offset_for_rbsp_len(ebsp, header_rbsp_len);
     let ebsp_slice_data = ebsp.get(data_start..).unwrap_or(&[]);
     if ctbs_x < 2 && entry_point_offsets.is_empty() {
         let mut row_rbsp = Vec::new();
         let row_bytes = vaco_bitstream::annexb::to_rbsp(ebsp_slice_data, &mut row_rbsp);
-        return decode_wpp_single_column(
+        decode_wpp_single_column(
             budget, row_bytes, walk, row_start, row_count, ctb_size_i, qp, kind, cabac_init,
-        );
+        )?;
+        return Ok(None);
     }
     let row_ranges = wpp_row_ranges(
         budget,
@@ -1379,10 +1410,14 @@ fn decode_wpp_rows(
         walk,
         ctbs_x,
         row_start,
+        first_col,
+        last_col,
         ctb_size_i,
         qp,
         kind,
         cabac_init,
+        seed_context,
+        preserve_first_row_qp,
     );
     budget.release(row_ranges_bytes);
     result
@@ -1450,11 +1485,15 @@ fn decode_wpp_row_ranges(
     walk: &mut Ctx<'_, '_, '_, '_>,
     ctbs_x: u32,
     row_start: u32,
+    first_col: u32,
+    last_col: u32,
     ctb_size_i: i32,
     qp: i8,
     kind: SliceKind,
     cabac_init: bool,
-) -> Result<()> {
+    seed_context: Option<ContextBank>,
+    preserve_first_row_qp: bool,
+) -> Result<Option<ContextBank>> {
     // The local row's own context state, as it stood right after CTU column 1
     // finished (§9.3.2.3) -- published once per row into a fixed-size board
     // (Stage 2b step 2, `docs/codec/hevc-wavefront-threading.md`: the same
@@ -1472,6 +1511,7 @@ fn decode_wpp_row_ranges(
     // `CabacDecoder` borrow ends (the row's CTU loop finishes) before the
     // next row refills it.
     let mut row_rbsp: Vec<u8> = Vec::new();
+    let mut last_context = None;
 
     for (row_idx, &(start, end)) in row_ranges.iter().enumerate() {
         let row_u32 = row_start.saturating_add(u32::try_from(row_idx).unwrap_or(0));
@@ -1489,7 +1529,9 @@ fn decode_wpp_row_ranges(
         // call always re-derives `qg_qp_pred`/`cu_qp_delta_val` fresh (see
         // that function's own QG-reset comment), so nothing else needs
         // resetting here.
-        walk.qp_y_prev = walk.shared.slice_qp;
+        if row_idx > 0 || !preserve_first_row_qp {
+            walk.qp_y_prev = walk.shared.slice_qp;
+        }
         walk.edges.begin_row(row_us)?;
         walk.cu_grid.begin_row(budget, row_us)?;
         walk.sao_params.begin_row(budget, row_us)?;
@@ -1503,12 +1545,20 @@ fn decode_wpp_row_ranges(
                 .get(row_idx.saturating_sub(1))
                 .copied()
                 .unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
+        } else if row_idx == 0 && ctbs_x >= 2 {
+            seed_context.unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
         } else {
             new_context_bank(kind, cabac_init, qp)
         };
 
         let mut stop = false;
-        for col in 0..ctbs_x {
+        let col_start = if row_idx == 0 { first_col } else { 0 };
+        let col_end = if row_idx.saturating_add(1) == row_ranges.len() {
+            last_col
+        } else {
+            ctbs_x
+        };
+        for col in col_start..col_end {
             let col_us = usize::try_from(col).unwrap_or(0);
             walk.recon.begin_ctu(row_us, col_us)?;
             let addr = row_u32.saturating_mul(ctbs_x).saturating_add(col);
@@ -1516,6 +1566,7 @@ fn decode_wpp_row_ranges(
             let cy = i32::try_from(row_u32).unwrap_or(0) * ctb_size_i;
             ctu::decode_ctu(&mut cabac, &mut ctx, walk, cx, cy, addr)?;
             walk.recon.publish_ctu(row_us, col_us)?;
+            last_context = Some(ctx);
 
             // §9.3.2.3: the context state is stored once a row's own second
             // CTU (column index 1) has finished, for the row below to load —
@@ -1541,7 +1592,7 @@ fn decode_wpp_row_ranges(
             break;
         }
     }
-    Ok(())
+    Ok(last_context)
 }
 
 /// Refuse, up front, every combination this crate does not implement — see

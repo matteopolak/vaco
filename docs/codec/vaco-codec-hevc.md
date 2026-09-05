@@ -174,7 +174,7 @@ the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, SPS/PPS range extensions, SCC
 extensions and tiles. Neither I_PCM (including
 `pcm_loop_filter_disabled_flag`), transform skip, deblocking, SAO,
-`entropy_coding_sync` (WPP), `cu_qp_delta_enabled`, P-slices, B-slices, nor
+`cu_qp_delta_enabled`, P-slices, B-slices, nor
 weighted (uni- or bi-predictive) prediction are on this list any more.
 `transquant_bypass_enabled_flag` is also accepted and its per-CU syntax is
 implemented — see the I_PCM/transquant-bypass section below.
@@ -776,7 +776,10 @@ starting context — never carried forward from that row's own last CTU.
 Each row's arithmetic-decoding engine (`CabacDecoder`) always reinitialises
 fresh at that row's own substream's first byte, matching clause 9.3.1.2's
 own slice-start init; only the context state is conditionally inherited
-rather than reset.
+rather than reset. A dependent segment that begins part-way through a row also
+inherits the preceding segment's final context and `qPY_PREV` state under
+§9.3.2.5/§8.6.1; the predictor still resets at the first CTB of every later
+WPP row.
 
 ### Root cause, found and fixed
 
@@ -890,8 +893,27 @@ The checked-in 22,474-byte Annex-B stream (SHA-256
 to 48 64x240 yuv420p frames, exactly 1,105,920 visible bytes. The archive's
 published and Vaco/black-box reference MD5 is
 `f710612103f386c415be3e6300693451`, and the complete Y, U, and V byte stream
-matches. WPP segments that are not row-aligned, or whose filtering is disabled
-across a filtered slice boundary, remain named refusals.
+matches. WPP segments that are not row-aligned remain named refusals except
+for the bounded two-CTU-wide partial-row shape exercised below; filtered
+boundaries without cross-slice filtering remain refused.
+
+### Dependent WPP slice segments — bounded partial-row shape
+
+The registered corpus entry `jctvc-hevc-wpp-e-ericsson-main-2`
+(`WPP_E_ericsson_MAIN_2`) exercises the next bounded shape: a two-CTU-wide
+picture whose dependent segments may split the first row at CTU address one,
+then continue through complete rows. At each dependent boundary the decoder
+preserves both the CABAC context bank and the running QP predictor; a new row
+still uses the WPP context saved after the preceding row's second CTU and
+resets `qPY_PREV` to `SliceQpY`.
+
+The checked-in 29,642-byte Annex-B stream (SHA-256
+`c8fe49762a13e1cc2b033308bb22aeb35da0c96f94ca8ef7d87d95bdadaeaa2c`) decodes
+to 48 128x240 yuv420p frames, exactly 2,211,840 visible bytes. The archive's
+published and Vaco/black-box reference MD5 is
+`485798dbf95ad61232075df2f294aa3f`, and the complete Y, U, and V byte stream
+matches. Other non-row-aligned WPP boundaries and tile pictures remain named
+refusals.
 
 ## Tile pictures — named refusal verified by a real two-column stream
 
