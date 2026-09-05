@@ -128,6 +128,12 @@ fn reflect_101(index: i32, n: i32) -> i32 {
 /// pinned this down.
 #[must_use]
 pub(crate) fn sample_reflect101(rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> u8 {
+    if (0..w).contains(&x) && (0..h).contains(&y) {
+        let (Ok(uy), Ok(ux)) = (usize::try_from(y), usize::try_from(x)) else {
+            return 0;
+        };
+        return rows.get(uy).and_then(|r| r.get(ux)).copied().unwrap_or(0);
+    }
     let ry = reflect_101(y, h);
     let rx = reflect_101(x, w);
     let (Ok(uy), Ok(ux)) = (usize::try_from(ry), usize::try_from(rx)) else {
