@@ -375,6 +375,17 @@ fn a_grid_with_unknown_descriptor_bits_is_refused() {
 }
 
 #[test]
+fn a_grid_with_reserved_iref_flags_is_refused() {
+    let mut bytes = heif();
+    let iref = bytes.windows(4).position(|w| w == b"iref").unwrap();
+    // `iref` is a FullBox: its least-significant flags byte follows its type.
+    bytes[iref + 7] = 1;
+    let demux = open(bytes);
+    assert_eq!(demux.streams().len(), 3);
+    assert!(demux.stream_groups().is_empty());
+}
+
+#[test]
 fn a_grid_with_an_unknown_ispe_version_or_flags_is_refused() {
     for (relative_offset, byte) in [(4, 1u8), (7, 1)] {
         let mut bytes = heif();

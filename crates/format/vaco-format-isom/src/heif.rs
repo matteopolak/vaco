@@ -53,7 +53,7 @@ pub struct ItemInfo {
 impl ItemInfo {
     fn parse(infe: &IsoBox<'_>) -> Option<Self> {
         let full = infe.full().ok()?;
-        if full.version > 3 {
+        if full.version > 3 || full.flags & !1 != 0 {
             return None;
         }
         let mut r = full.reader();
@@ -96,6 +96,9 @@ pub fn parse_iinf(iinf: &IsoBox<'_>) -> Vec<ItemInfo> {
     let Ok(full) = iinf.full() else {
         return Vec::new();
     };
+    if full.version > 1 || full.flags != 0 {
+        return Vec::new();
+    }
     // `entry_count` is 16 bits in version 0, 32 bits otherwise (§8.11.6.2).
     let count_width = if full.version == 0 { 2 } else { 4 };
     let mut r = full.reader();
@@ -123,6 +126,9 @@ pub fn parse_iinf(iinf: &IsoBox<'_>) -> Vec<ItemInfo> {
 #[must_use]
 pub fn parse_pitm(pitm: &IsoBox<'_>) -> Option<u32> {
     let full = pitm.full().ok()?;
+    if full.version > 1 || full.flags != 0 {
+        return None;
+    }
     let mut r = full.reader();
     Some(if full.version == 0 {
         u32::from(r.be16())
@@ -179,7 +185,7 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
     let Ok(full) = iloc.full() else {
         return Vec::new();
     };
-    if full.version > 2 {
+    if full.version > 2 || full.flags != 0 {
         return Vec::new();
     }
     let mut r = full.reader();
@@ -293,7 +299,7 @@ pub fn parse_ipma(iprp: &IsoBox<'_>) -> Option<Vec<ItemPropertyAssociation>> {
     let Ok(full) = ipma.full() else {
         return None;
     };
-    if full.version > 1 {
+    if full.version > 1 || full.flags & !1 != 0 {
         return None;
     }
     let mut r = full.reader();
@@ -360,7 +366,10 @@ pub fn parse_iref(iref: &IsoBox<'_>) -> Vec<ItemReference> {
     let Ok(full) = iref.full() else {
         return Vec::new();
     };
-    let wide = full.version >= 1;
+    if full.version > 1 || full.flags != 0 {
+        return Vec::new();
+    }
+    let wide = full.version == 1;
     let mut out = Vec::new();
     for child in iref.children_after(4).flatten().take(MAX_ITEMS) {
         let mut r = vaco_bitstream::ByteReader::new(child.payload);
@@ -579,12 +588,42 @@ mod tests {
     }
 
     #[test]
+    fn infe_rejects_reserved_flags() {
+        let body = [
+            0, 1, // item_id
+            0, 0, // item_protection_index
+            b'a', b'v', b'0', b'1', // item_type
+            0,    // item_name
+        ];
+        let raw = fullbx(b"infe", 2, 2, &body);
+        assert!(ItemInfo::parse(&first_box(&raw)).is_none());
+    }
+
+    #[test]
     fn iinf_refuses_entries_past_its_declared_count() {
         // This is the real AVIF item's `infe`, after an `iinf` claiming no
         // entries. The child must not manufacture an item outside the table.
         let infe = fullbx(b"infe", 2, 0, &hex_bytes("0001000061763031436f6c6f7200"));
         let iinf = fullbx(b"iinf", 0, 0, &[&[0, 0], infe.as_slice()].concat());
         assert!(parse_iinf(&first_box(&iinf)).is_empty());
+    }
+
+    #[test]
+    fn iinf_rejects_an_unknown_version_or_reserved_flags() {
+        let infe = fullbx(b"infe", 2, 0, &hex_bytes("0001000061763031436f6c6f7200"));
+        for (version, flags, count) in [(2, 0, 1u32), (1, 1, 1)] {
+            let body = [count.to_be_bytes().as_slice(), infe.as_slice()].concat();
+            let raw = fullbx(b"iinf", version, flags, &body);
+            assert!(parse_iinf(&first_box(&raw)).is_empty());
+        }
+    }
+
+    #[test]
+    fn pitm_rejects_an_unknown_version_or_reserved_flags() {
+        for (version, flags, body) in [(2, 0, vec![0, 0, 0, 1]), (0, 1, vec![0, 1])] {
+            let raw = fullbx(b"pitm", version, flags, &body);
+            assert_eq!(parse_pitm(&first_box(&raw)), None);
+        }
     }
 
     /// `iloc` bytes from the same file: version 0, one item, one extent
@@ -714,6 +753,13 @@ mod tests {
     }
 
     #[test]
+    fn iloc_rejects_reserved_flags() {
+        let body = hex_bytes("4400000100010000000100000121000002f9");
+        let raw = fullbx(b"iloc", 0, 1, &body);
+        assert!(parse_iloc(&first_box(&raw)).is_empty());
+    }
+
+    #[test]
     fn ispe_reports_width_and_height() {
         let body = [0, 0, 0, 0x40, 0, 0, 0, 0x30];
         let raw = fullbx(b"ispe", 0, 0, &body);
@@ -831,6 +877,19 @@ mod tests {
     }
 
     #[test]
+    fn ipma_rejects_reserved_flags() {
+        let body = [
+            0, 0, 0, 1, // entry_count
+            0, 1, // item_id
+            1, // association_count
+            1, // non-essential property_index
+        ];
+        let ipma = fullbx(b"ipma", 0, 2, &body);
+        let raw = bx(b"iprp", &ipma);
+        assert!(parse_ipma(&first_box(&raw)).is_none());
+    }
+
+    #[test]
     fn ipma_refuses_a_zero_property_index() {
         // `property_index` is one-based. Silently skipping zero would let an
         // item reach the demuxer with an incomplete property configuration.
@@ -882,6 +941,19 @@ mod tests {
         assert_eq!(refs[0].kind, FourCc::new(b"dimg"));
         assert_eq!(refs[0].from_item_id, 1);
         assert_eq!(refs[0].to_item_ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn iref_rejects_an_unknown_version_or_reserved_flags() {
+        let mut record = 1u32.to_be_bytes().to_vec();
+        record.extend_from_slice(&1u16.to_be_bytes());
+        record.extend_from_slice(&2u32.to_be_bytes());
+        for (version, flags) in [(2, 0), (1, 1)] {
+            let mut body = Vec::new();
+            body.extend_from_slice(&bx(b"dimg", &record));
+            let raw = fullbx(b"iref", version, flags, &body);
+            assert!(parse_iref(&first_box(&raw)).is_empty());
+        }
     }
 
     #[test]

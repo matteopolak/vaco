@@ -823,6 +823,10 @@ crate decides what becomes a stream:
   boxes in both worlds. A malformed present `ipma` table, including an index
   beyond its `ipco` property list, a duplicate ID, or a descending ID refuses
   the item file rather than applying a partial property configuration. A
+  supported HEIF item FullBox also has to use its declared version and flags:
+  `iinf`, `pitm`, `iloc`, and `iref` have no flags; `ipma` permits only
+  `large_index`; and `infe` permits only `hidden_item`. A reserved header bit
+  is not an extension this demuxer can safely reinterpret. A
   duplicate `iloc` item ID likewise refuses the item file rather than letting
   first-match range resolution select arbitrary item bytes. A present `pitm`
   primary ID must name a declared image item, rather than
