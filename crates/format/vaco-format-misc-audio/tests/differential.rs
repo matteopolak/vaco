@@ -265,7 +265,9 @@ fn every_fixture_matches_the_measured_reference_row() {
                     if Some(pkt.duration) != vaco_core::Duration::from_ticks(ticks, time_base) {
                         failures.push(format!(
                             "{}: packet {} duration {:?} lost its native sample clock",
-                            row.file, sizes.len(), pkt.duration.as_ratio()
+                            row.file,
+                            sizes.len(),
+                            pkt.duration.as_ratio()
                         ));
                     }
                     sizes.push(pkt.len);

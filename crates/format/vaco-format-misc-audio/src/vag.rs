@@ -197,11 +197,9 @@ impl Demuxer for VagDemuxer {
             .saturating_mul(u64::from(SAMPLES_PER_BLOCK));
         pkt.pts = vaco_core::Timestamp::new(i64::try_from(frame_index).unwrap_or(i64::MAX));
         pkt.dts = pkt.pts;
-        pkt.duration = vaco_core::Duration::from_ticks(
-            i64::from(SAMPLES_PER_BLOCK),
-            self.stream.time_base,
-        )
-        .unwrap_or(vaco_core::Duration::ZERO);
+        pkt.duration =
+            vaco_core::Duration::from_ticks(i64::from(SAMPLES_PER_BLOCK), self.stream.time_base)
+                .unwrap_or(vaco_core::Duration::ZERO);
         pkt.flags = PacketFlags::KEY;
         pkt.pos = Some(pos);
         self.blocks_emitted = self.blocks_emitted.saturating_add(1);

@@ -212,11 +212,9 @@ impl Demuxer for WavpackDemuxer {
         pkt.flags = PacketFlags::KEY;
         pkt.pos = Some(start);
 
-        pkt.duration = vaco_core::Duration::from_ticks(
-            i64::from(hdr.block_samples),
-            self.stream.time_base,
-        )
-        .unwrap_or(vaco_core::Duration::ZERO);
+        pkt.duration =
+            vaco_core::Duration::from_ticks(i64::from(hdr.block_samples), self.stream.time_base)
+                .unwrap_or(vaco_core::Duration::ZERO);
 
         self.frames_emitted = self
             .frames_emitted

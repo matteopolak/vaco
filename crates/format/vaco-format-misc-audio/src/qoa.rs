@@ -192,7 +192,10 @@ impl Demuxer for QoaDemuxer {
         if self.total_samples == 0 {
             return None;
         }
-        Duration::from_ticks(i64::try_from(self.total_samples).ok()?, self.stream.time_base)
+        Duration::from_ticks(
+            i64::try_from(self.total_samples).ok()?,
+            self.stream.time_base,
+        )
     }
 }
 

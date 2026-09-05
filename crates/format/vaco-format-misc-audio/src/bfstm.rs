@@ -427,8 +427,9 @@ impl Demuxer for BfstmDemuxer {
         packet
             .side_data
             .push(PacketSideData::DurationTicks(i64::from(samples)));
-        packet.duration = vaco_core::Duration::from_ticks(i64::from(samples), self.stream.time_base)
-            .unwrap_or(vaco_core::Duration::ZERO);
+        packet.duration =
+            vaco_core::Duration::from_ticks(i64::from(samples), self.stream.time_base)
+                .unwrap_or(vaco_core::Duration::ZERO);
         self.blocks_emitted = self.blocks_emitted.saturating_add(1);
         Ok(packet)
     }

@@ -18,7 +18,10 @@ fn aiff_keeps_the_declared_sample_count_at_the_native_rate() {
     // ffprobe 9.0.1 reports time_base=1/44100, duration_ts=1024,
     // duration=0.023220, nb_frames=1024, and nb_read_packets=1.
     assert_eq!(demux.streams()[0].duration_ts, Some(1_024));
-    assert_eq!(demux.duration().map(Duration::as_ratio), Some((256, 11_025)));
+    assert_eq!(
+        demux.duration().map(Duration::as_ratio),
+        Some((256, 11_025))
+    );
     assert_eq!(
         demux.duration_exact().map(ExactDuration::as_ratio),
         Some((256, 11_025))
@@ -44,7 +47,10 @@ fn caf_keeps_the_declared_sample_count_at_the_native_rate() {
     // ffprobe 9.0.1 reports time_base=1/44100, duration_ts=1024,
     // duration=0.023220, nb_frames=1024, and nb_read_packets=1.
     assert_eq!(demux.streams()[0].duration_ts, Some(1_024));
-    assert_eq!(demux.duration().map(Duration::as_ratio), Some((256, 11_025)));
+    assert_eq!(
+        demux.duration().map(Duration::as_ratio),
+        Some((256, 11_025))
+    );
     assert_eq!(
         demux.duration_exact().map(ExactDuration::as_ratio),
         Some((256, 11_025))
