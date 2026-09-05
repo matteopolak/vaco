@@ -12,8 +12,8 @@
 //! structure a real decode of an intra or intra-only frame touches:
 //! `tile_info()`, `quantization_params()`, `segmentation_params()`,
 //! `delta_q_params()`/`delta_lf_params()`, `loop_filter_params()`/
-//! `cdef_params()`/`lr_params()` (parsed for correct bit alignment; not
-//! *applied* — deblocking/CDEF/restoration are issue #35, another agent),
+//! `cdef_params()`/`lr_params()` (CDEF parameters are retained for filtering;
+//! restoration modes are retained for explicit scope checks),
 //! `read_tx_mode()`, `frame_reference_mode()`/`skip_mode_params()`/
 //! `global_motion_params()` (all three are no-op reads for an intra frame,
 //! kept only so the syntax order matches the specification exactly),
@@ -26,6 +26,7 @@
 //!
 //! `Vaco-Spec-Ref: aom-av1-spec §5.9 (frame header OBU syntax)`.
 
+use crate::cdef::{CdefParams, Strength};
 use crate::restoration::{FrameRestoration, RestorationType};
 use vaco_bitstream::BitReader;
 use vaco_core::{Error, Result};
@@ -190,13 +191,11 @@ pub struct FrameHeader {
     pub reduced_tx_set: bool,
     /// Retained plane modes and unit sizes from `lr_params()`, §5.9.20.
     pub restoration: FrameRestoration,
-    /// `cdef_bits`, §5.9.19 — how many literal bits `read_cdef()`
-    /// (§5.11.56) draws per 64x64 unit in the tile data itself. `0` when
-    /// CDEF is off for this frame (`coded_lossless`, `allow_intrabc`, or
-    /// the sequence's own `enable_cdef == 0`), in which case `read_cdef()`
-    /// is a no-op — matching the specification's own early return, not a
-    /// missing value.
+    /// Index width per 64x64 unit (§5.9.19/§5.11.56). Zero bits can mean
+    /// an enabled single-entry table; `cdef.enabled` distinguishes disablement.
     pub cdef_bits: u32,
+    /// Strengths and damping retained for the post-reconstruction CDEF pass.
+    pub cdef: CdefParams,
 }
 
 impl FrameHeader {
@@ -422,7 +421,7 @@ fn parse_inner(
     let all_lossless = coded_lossless && size.coded_width == size.upscaled_width;
 
     parse_loop_filter_params(r, seq, coded_lossless, allow_intrabc, num_planes);
-    let cdef_bits = parse_cdef_params(r, seq, coded_lossless, allow_intrabc, num_planes);
+    let (cdef_bits, cdef) = parse_cdef_params(r, seq, coded_lossless, allow_intrabc, num_planes);
     let restoration = parse_lr_params(r, seq, all_lossless, allow_intrabc, num_planes);
 
     let tx_mode = if coded_lossless {
@@ -460,6 +459,7 @@ fn parse_inner(
         reduced_tx_set,
         restoration,
         cdef_bits,
+        cdef,
     })
 }
 
@@ -805,23 +805,38 @@ fn parse_cdef_params(
     coded_lossless: bool,
     allow_intrabc: bool,
     num_planes: u32,
-) -> u32 {
+) -> (u32, CdefParams) {
     if coded_lossless || allow_intrabc || !seq.enable_cdef {
-        return 0;
+        return (0, CdefParams::default());
     }
-    let _damping = r.get(2);
+    let mut params = CdefParams {
+        enabled: true,
+        damping: u8::try_from(r.get(2) + 3).unwrap_or(3),
+        ..CdefParams::default()
+    };
     let cdef_bits = r.get(2);
-    for _ in 0..(1u32 << cdef_bits) {
-        let _y_pri = r.get(4);
-        let sec = r.get(2);
-        let _y_sec = if sec == 3 { sec + 1 } else { sec };
+    for index in 0..(1usize << cdef_bits) {
+        let y = read_cdef_strength(r);
+        if let Some(entry) = params.y.get_mut(index) {
+            *entry = y;
+        }
         if num_planes > 1 {
-            let _uv_pri = r.get(4);
-            let uv_sec = r.get(2);
-            let _uv_sec = if uv_sec == 3 { uv_sec + 1 } else { uv_sec };
+            let uv = read_cdef_strength(r);
+            if let Some(entry) = params.uv.get_mut(index) {
+                *entry = uv;
+            }
         }
     }
-    cdef_bits
+    (cdef_bits, params)
+}
+
+fn read_cdef_strength(r: &mut BitReader<'_>) -> Strength {
+    let primary = u8::try_from(r.get(4)).unwrap_or(0);
+    let secondary = u8::try_from(r.get(2)).unwrap_or(0);
+    Strength {
+        primary,
+        secondary: if secondary == 3 { 4 } else { secondary },
+    }
 }
 
 fn parse_lr_params(
@@ -1042,6 +1057,52 @@ mod tests {
         let data = [0u8; 24];
         for n in 0..=data.len() {
             let _ = FrameHeader::parse(&data[..n], &seq, 0, 0);
+        }
+    }
+
+    #[test]
+    fn cdef_single_entry_retains_strengths_and_damping() {
+        let mut seq = seq_header();
+        seq.enable_cdef = true;
+        // damping=2(+3), bits=0, y=(9,3->4), uv=(6,2).
+        let mut reader = BitReader::new(&[0b1000_1001, 0b1101_1010]);
+        let (bits, params) = parse_cdef_params(&mut reader, &seq, false, false, 3);
+        assert_eq!(bits, 0);
+        assert!(params.enabled);
+        assert_eq!(params.damping, 5);
+        assert_eq!(
+            params.y[0],
+            Strength {
+                primary: 9,
+                secondary: 4
+            }
+        );
+        assert_eq!(
+            params.uv[0],
+            Strength {
+                primary: 6,
+                secondary: 2
+            }
+        );
+        assert_eq!(reader.bit_pos(), 16);
+        reader.check().unwrap();
+    }
+
+    #[test]
+    fn cdef_disabled_syntax_consumes_no_bits() {
+        let mut seq = seq_header();
+        for (enable, lossless, intrabc) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            seq.enable_cdef = enable;
+            let mut reader = BitReader::new(&[]);
+            let (bits, params) = parse_cdef_params(&mut reader, &seq, lossless, intrabc, 3);
+            assert_eq!(bits, 0);
+            assert!(!params.enabled);
+            assert_eq!(reader.bit_pos(), 0);
+            reader.check().unwrap();
         }
     }
 

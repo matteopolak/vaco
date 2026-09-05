@@ -10,12 +10,12 @@
 //! restoration/film-grain *syntax* so later bytes stay aligned, tx mode),
 //! the §8.2 symbol decoder and its CDF adaptation rule, the tile/superblock
 //! partition tree and mode-info walk, coefficient decoding, the inverse
-//! transforms, and intra prediction including CFL.
+//! transforms, intra prediction including CFL, and CDEF filtering.
 //!
-//! Out of scope, left for later work: inter prediction, deblocking/CDEF/
+//! Out of scope, left for later work: inter prediction, deblocking/
 //! superres/loop restoration *application* (their header syntax is parsed
 //! so the bitstream stays aligned, but the filters do not run, so output is
-//! pre-in-loop-filter), film grain synthesis, frame threading/DPB, and
+//! missing those in-loop stages), film grain synthesis, frame threading/DPB, and
 //! Argon conformance. An inter frame's header is rejected with
 //! [`vaco_core::Error::Unsupported`] rather than guessed at.
 //!
@@ -49,10 +49,11 @@
 //! specification's own §9.4 listing via `scripts/extract_cdf.py` rather
 //! than retyped, and cross-checked by this crate's own tests rather than
 //! against another implementation — a second transcription of the same
-//! table is not an independent check. The restoration module additionally uses
+//! table is not an independent check. CDEF and restoration additionally use
 //! pinned BSD-licensed dav1d scalar output as its independent test oracle.
 #![forbid(unsafe_code)]
 
+pub mod cdef;
 pub mod cdf;
 pub mod decode;
 pub mod frame_header;

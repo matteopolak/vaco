@@ -6,7 +6,7 @@ end: OBU/sequence/frame header, the symbol decoder and its adaptive CDF
 machinery, the tile/superblock/partition/mode-info walk, coefficient
 decode, dequantization, inverse transforms, and intra prediction (basic/
 Paeth, DC, smooth, directional with the intra edge filter and upsampling,
-and CFL). Inter prediction, deblocking/CDEF/superres/loop restoration,
+and CFL), followed by CDEF. Inter prediction, deblocking/superres/loop restoration,
 film grain, threading/DPB management and Argon conformance are explicitly
 out of scope — later work, other crates.
 
@@ -25,7 +25,8 @@ direct decoder callers and tests use the shared symbol engine.
 | `symbol.rs` | Compatibility re-export of `vaco-codec-msac::av1::SymbolDecoder`; the shared crate owns §8.2's range arithmetic and CDF adaptation |
 | `cdf.rs` | `TileCdf` — one fresh copy of every default CDF array (§9.4) this crate's syntax-element set reads, built once per tile; `qctx()`'s base_q_idx bucketing for the four coefficient-table families |
 | `tables.rs` + `tables/{default_cdf,scan,conversion,quant}.rs` | mechanically-extracted spec tables (default CDFs, scan orders, size/context conversion tables, quantizer lookups) |
-| `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — `uncompressed_header()`'s intra path past `vaco-parse-av1`'s stop point: tile info, quantization, segmentation, delta-q/lf, loop filter/CDEF/restoration params (parsed for bit alignment; not applied), tx mode, film grain params (parsed; not applied) |
+| `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — intra frame syntax, including retained CDEF strengths/damping and restoration modes; deblocking and film-grain parameters remain syntax-only |
+| `cdef.rs` | Direction search, constrained filtering, variance adaptation, damping, and chroma direction mapping; see [CDEF](../av1-cdef.md) for oracle coverage and remaining frame-conformance gaps |
 | `transform.rs` | `Av1TxType`, `inverse_transform_2d` — the full §7.13 inverse DCT/ADST/WHT/identity transform network |
 | `predict.rs` | `predict_intra`/`predict_chroma_from_luma` — §7.11.2/§7.11.5 |
 | `framebuf.rs` | `Picture`/`Plane` — the private `u16`-backed reconstruction buffer intra prediction needs (reads already-written pixels of the buffer being written) |
@@ -102,8 +103,8 @@ libdav1d`'s reference decode (`tests/oracle.rs`):
   bits desyncs every symbol read afterward. Both are read now — a block
   that actually sets `has_palette_y`/`has_palette_uv` returns
   `Error::Unsupported` (palette prediction itself stays out of scope);
-  `read_cdef()`'s literal is consumed whenever `cdef_bits > 0` regardless
-  of whether this crate ever applies CDEF.
+  `read_cdef()` assigns a strength-table index on the first non-skip block,
+  including the enabled single-entry table with `cdef_bits = 0`.
 - **`SymbolDecoder::exit_symbol` called `BitReader::get()` with the tile's
   entire remaining bit count** — `get()` panics past 32 bits, so any tile
   whose last symbol read finished with more than 32 unread bits left in it

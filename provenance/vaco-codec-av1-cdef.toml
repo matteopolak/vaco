@@ -1,0 +1,13 @@
+[[source]]
+id = "dav1d-cdef-aa09a630"
+kind = "blackbox"
+title = "dav1d scalar CDEF reference at aa09a630ef57ee7d9482ffb7ef355a903dbb5302 (BSD-2-Clause); read and used only by the independent fixture generator"
+acquired = "2026-09-04"
+where = "https://github.com/videolan/dav1d/blob/aa09a630ef57ee7d9482ffb7ef355a903dbb5302/src/cdef_tmpl.c"
+
+[[table]]
+name = "DIRECTIONS"
+file = "crates/codec/vaco-codec-av1/src/cdef.rs"
+source = "aom-av1-spec"
+clause = "7.15.3 Cdef_Directions"
+method = "transcribed"

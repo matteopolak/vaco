@@ -2438,6 +2438,7 @@ dependencies = [
 name = "vaco-checkasm"
 version = "0.1.0"
 dependencies = [
+ "vaco-codec-av1",
  "vaco-codec-dsp-fmtconvert",
  "vaco-codec-dsp-idct",
  "vaco-codec-dsp-intrapred",

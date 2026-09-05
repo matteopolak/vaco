@@ -39,6 +39,10 @@ use crate::symbol::SymbolDecoder;
 use crate::tables;
 use crate::transform::{self, Av1TxType};
 
+#[cfg(test)]
+#[path = "cdef_frame_tests.rs"]
+mod cdef_frame_tests;
+
 const BLOCK_8X8: u8 = 3;
 const BLOCK_INVALID: u8 = tables::BLOCK_INVALID;
 
@@ -523,7 +527,137 @@ fn decode_frame(
     };
 
     decode_tiles(&mut ctx, tile_group_payload)?;
+    apply_cdef(&mut ctx, budget)?;
     pic_to_frame(budget, seq, fh, &ctx.pic, mi_cols, mi_rows)
+}
+
+fn apply_cdef(ctx: &mut FrameCtx, budget: &mut Budget) -> Result<()> {
+    let params = &ctx.header.cdef;
+    if !params.enabled
+        || params
+            .y
+            .iter()
+            .chain(&params.uv)
+            .all(|strength| strength.primary == 0 && strength.secondary == 0)
+    {
+        return Ok(());
+    }
+    let mut filtered = Picture::new(
+        budget,
+        ctx.pic.y.width(),
+        ctx.pic.y.height(),
+        ctx.pic.u.as_ref().map_or(0, Plane::width),
+        ctx.pic.u.as_ref().map_or(0, Plane::height),
+        ctx.seq_mono,
+    )?;
+    let mut source_bytes = 0u64;
+    for plane_index in 0..3 {
+        if let (Some(source), Some(destination)) =
+            (ctx.pic.plane(plane_index), filtered.plane_mut(plane_index))
+        {
+            source_bytes += u64::try_from(source.as_slice().len()).unwrap_or(0) * 2;
+            for y in 0..source.height() {
+                for x in 0..source.width() {
+                    destination.set(x, y, source.get_clamped(ix(x), ix(y)));
+                }
+            }
+        }
+    }
+    let shift = ctx.bit_depth - 8;
+    for r in (0..ctx.mi_rows).step_by(2) {
+        for c in (0..ctx.mi_cols).step_by(2) {
+            let slot = (r >> 4) * ctx.cdef_stride + (c >> 4);
+            let index = ctx.cdef_idx.get(slot).copied().unwrap_or(-1);
+            if index < 0 || cdef_block_skipped(ctx, r, c) {
+                continue;
+            }
+            let index = usize::try_from(index).unwrap_or(0);
+            let mut luma = [0; 64];
+            for (i, sample) in luma.iter_mut().enumerate() {
+                *sample = ctx
+                    .pic
+                    .y
+                    .get_clamped(ix(c * 4 + i % 8), ix(r * 4 + (i >> 3)));
+            }
+            let (direction, variance) = crate::cdef::find_direction(&luma, ctx.bit_depth)?;
+            budget.consume_fuel(1)?;
+            for plane_index in 0..3 {
+                let (Some(source), Some(destination)) =
+                    (ctx.pic.plane(plane_index), filtered.plane_mut(plane_index))
+                else {
+                    continue;
+                };
+                let chroma = plane_index != 0;
+                let sx = u32::from(chroma && ctx.subsampling_x);
+                let sy = u32::from(chroma && ctx.subsampling_y);
+                let (x, y, width, height) = ((c * 4) >> sx, (r * 4) >> sy, 8 >> sx, 8 >> sy);
+                let strength = if chroma {
+                    params.uv.get(index)
+                } else {
+                    params.y.get(index)
+                }
+                .copied()
+                .ok_or(Error::InvalidData("CDEF strength index exceeds table"))?;
+                let primary = u16::from(strength.primary) << shift;
+                let secondary = u16::from(strength.secondary) << shift;
+                let chosen_direction = if primary == 0 {
+                    0
+                } else if chroma {
+                    crate::cdef::chroma_direction(direction, ctx.subsampling_x, ctx.subsampling_y)
+                } else {
+                    direction
+                };
+                let primary = if chroma {
+                    primary
+                } else {
+                    crate::cdef::adjust_strength(primary, variance)
+                };
+                let mut neighborhood = [0; 144];
+                for ny in 0..height + 4 {
+                    for nx in 0..width + 4 {
+                        if let Some(sample) = neighborhood.get_mut(ny * 12 + nx) {
+                            *sample = source.get_clamped(ix(x) + ix(nx) - 2, ix(y) + ix(ny) - 2);
+                        }
+                    }
+                }
+                let edges = u8::from(x > 0)
+                    | (u8::from(x + width < source.width()) << 1)
+                    | (u8::from(y > 0) << 2)
+                    | (u8::from(y + height < source.height()) << 3);
+                let output = crate::cdef::filter_block(
+                    &neighborhood,
+                    crate::cdef::FilterParams {
+                        width,
+                        height,
+                        edges,
+                        bit_depth: ctx.bit_depth,
+                        direction: chosen_direction,
+                        primary,
+                        secondary,
+                        damping: params.damping + shift - u8::from(chroma),
+                    },
+                )?;
+                for oy in 0..height {
+                    for ox in 0..width {
+                        destination.set(
+                            x + ox,
+                            y + oy,
+                            output.get(oy * 8 + ox).copied().unwrap_or(0),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    ctx.pic = filtered;
+    budget.release(source_bytes);
+    Ok(())
+}
+
+fn cdef_block_skipped(ctx: &FrameCtx, r: usize, c: usize) -> bool {
+    [(r, c), (r + 1, c), (r, c + 1), (r + 1, c + 1)]
+        .into_iter()
+        .all(|(row, col)| ctx.mi_at(ix(row), ix(col)).is_some_and(|cell| cell.skip))
 }
 
 fn decode_tiles(ctx: &mut FrameCtx, payload: &[u8]) -> Result<()> {
@@ -1419,12 +1553,7 @@ fn read_skip(
     v
 }
 
-/// `read_cdef()`, §5.11.56. This crate never applies CDEF (out of scope,
-/// per the module doc), but the `cdef_idx` literal it reads from the tile
-/// bitstream — once per 64x64 unit, on that unit's first non-skip block —
-/// is real bit-consuming syntax that every later symbol read depends on
-/// landing in the right place, whether or not this crate ever uses the
-/// value.
+/// Read one strength-table index per 64x64 unit, at its first non-skip block.
 fn read_cdef(
     ctx: &mut FrameCtx,
     ts: &mut TileState<'_>,
@@ -1433,7 +1562,7 @@ fn read_cdef(
     mi_size: u8,
     skip: bool,
 ) {
-    if skip || ctx.header.coded_lossless || ctx.header.cdef_bits == 0 || ctx.header.allow_intrabc {
+    if skip || !ctx.header.cdef.enabled {
         return;
     }
     let cdef_size4 = 16usize; // Num_4x4_Blocks_Wide[BLOCK_64X64]
