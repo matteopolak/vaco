@@ -517,6 +517,37 @@ mod tests {
         bytes
     }
 
+    fn adts_frame_with_sbr_fill_payload() -> Vec<u8> {
+        use vaco_bitstream::BitWriter;
+        let mut body = BitWriter::new();
+        body.put(3, 6); // ID_FIL
+        body.put(4, 1); // one payload byte
+        body.put(4, 13); // EXT_SBR_DATA
+        body.put(4, 0); // remaining payload bits
+        body.put(3, 7); // ID_END
+        let body_bytes = body.finish();
+
+        let mut w = BitWriter::new();
+        w.put(12, 0xfff);
+        w.put(1, 0);
+        w.put(2, 0);
+        w.put(1, 1); // protection_absent
+        w.put(2, 1); // profile: LC
+        w.put(4, 3); // 48000
+        w.put(1, 0);
+        w.put(3, 1); // mono
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(13, 7 + body_bytes.len() as u32); // aac_frame_length
+        w.put(11, 0x7ff);
+        w.put(2, 0);
+        let mut bytes = w.finish();
+        bytes.extend_from_slice(&body_bytes);
+        bytes
+    }
+
     /// The first raw data block supplies a mono PCE before its SCE. Later
     /// ADTS blocks carry only the SCE and rely on that in-band configuration.
     fn adts_frame_with_leading_mono_pce_with_sce_tag(sce_tag: u32) -> Vec<u8> {
@@ -708,6 +739,17 @@ mod tests {
         let mut dec = AacDecoder::new(Limits::permissive());
         assert!(dec.send_packet(None).is_ok());
         assert!(matches!(dec.receive_frame(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn an_implicit_sbr_fill_payload_is_refused_before_frame_output() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, &adts_frame_with_sbr_fill_payload()).unwrap();
+
+        let error = dec.send_packet(Some(&packet)).unwrap_err();
+        assert!(error.to_string().contains("SBR fill payload"));
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 
     #[test]

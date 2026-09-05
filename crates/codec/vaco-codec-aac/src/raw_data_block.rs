@@ -8,12 +8,9 @@
 //! - `CPE`: `common_window`, and — when set — a shared `ics_info()` plus
 //!   `ms_mask_present`/`ms_used` (stored as [`MsMask`] for `reconstruct`'s
 //!   "joint stereo" step), then two `individual_channel_stream()`s.
-//! - `DSE`, `FIL`: **skipped wholesale**. Both are self-delimiting by their
-//!   own leading byte count (`data_stream_element()`'s `cnt`,
-//!   `fill_element()`'s `cnt`) — everything inside either one (ancillary
-//!   data, or an SBR/other extension payload nested in a `FIL`) sums to
-//!   exactly that many bytes by construction, so skipping the count is
-//!   bit-exact without decoding what is inside it.
+//! - `DSE`: skipped wholesale by its self-delimiting byte count.
+//! - `FIL`: skipped by its self-delimiting byte count unless its first
+//!   `extension_type` names SBR, which is refused before AAC-LC PCM decode.
 //! - `PCE`: parsed in full ([`crate::pce::ProgramConfigElement`]). The
 //!   decoder consumes a leading PCE while resolving a pending configuration;
 //!   a PCE found after audio elements is refused rather than ignored under a
@@ -39,6 +36,8 @@ const ID_DSE: u32 = 4;
 const ID_PCE: u32 = 5;
 const ID_FIL: u32 = 6;
 const ID_END: u32 = 7;
+const EXT_SBR_DATA: u32 = 13;
+const EXT_SBR_DATA_CRC: u32 = 14;
 
 /// One decoded syntactic element of a `raw_data_block()`.
 #[derive(Debug)]
@@ -117,15 +116,24 @@ fn skip_data_stream_element(r: &mut BitReader<'_>) -> Result<()> {
 }
 
 /// Skip a `fill_element()`: `count`(4, `+= esc_count - 1`(8) if 15), then
-/// exactly `cnt` raw bytes — `extension_payload()`'s own internal structure
-/// (SBR data or otherwise) always sums to exactly the outer `cnt`, so there
-/// is nothing to lose by not dispatching into it.
+/// exactly `cnt` raw bytes. The first payload nibble is `extension_type`; SBR
+/// types are not skipped because that would silently treat implicit HE-AAC as
+/// AAC-LC.
 fn skip_fill_element(r: &mut BitReader<'_>) -> Result<()> {
     let mut cnt = r.get(4);
     if cnt == 15 {
         cnt = cnt.saturating_add(r.get(8)).saturating_sub(1);
     }
-    r.skip_bytes(cnt as usize);
+    if cnt == 0 {
+        return Ok(r.check()?);
+    }
+    let extension_type = r.get(4);
+    if matches!(extension_type, EXT_SBR_DATA | EXT_SBR_DATA_CRC) {
+        return Err(Error::Unsupported(
+            "vaco-codec-aac: SBR fill payload is not implemented — refusing implicit HE-AAC",
+        ));
+    }
+    r.skip(cnt.saturating_mul(8).saturating_sub(4));
     Ok(r.check()?)
 }
 
@@ -276,6 +284,22 @@ mod tests {
         let mut r = BitReader::new(&bytes);
         let elements = read(&mut r, 4).unwrap();
         assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn sbr_fill_payloads_are_refused_before_pcm_decode() {
+        for extension_type in [super::EXT_SBR_DATA, super::EXT_SBR_DATA_CRC] {
+            let mut w = BitWriter::new();
+            w.put(3, super::ID_FIL);
+            w.put(4, 1); // cnt = 1 byte
+            w.put(4, extension_type);
+            w.put(4, 0); // remaining extension payload bits
+            w.put(3, super::ID_END);
+            let bytes = w.finish();
+            let mut r = BitReader::new(&bytes);
+            let error = read(&mut r, 4).unwrap_err();
+            assert!(error.to_string().contains("SBR fill payload"));
+        }
     }
 
     #[test]

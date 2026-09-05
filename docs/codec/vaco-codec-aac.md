@@ -516,14 +516,11 @@ pass.
 ### Fixture access for #446
 
 Neither `ffmpeg`'s native `aac` encoder nor `libfdk_aac` (not compiled
-into this environment's `ffmpeg` build) can produce HE-AAC. macOS's own
-`afconvert` (AudioToolbox) can, via `-d aach` (SBR only) and `-d aacp`
-(SBR+PS) — the ADTS files it produces were used to confirm real,
-implicit-signalling HE-AAC content exists and to decode a real
-`AudioSpecificConfig`'s explicit SBR/PS extension fields by hand (see
-"Implicit and explicit SBR signalling" below), but no fixture-based
-correlation table exists yet since no full decode path was built to
-produce one against.
+into this environment's `ffmpeg` build) can produce HE-AAC. Earlier work
+used macOS AudioToolbox output to confirm real implicit SBR signalling, but
+the currently installed `afconvert` rejects its former `aach`/`aacp` encoder
+format names and `ffmpeg`'s `aac_at` exposes AAC-LC only. This pass therefore
+does not claim a newly generated HE-AAC oracle or any HE-AAC PCM result.
 
 ### Implicit and explicit SBR signalling — confirmed against real content
 
@@ -547,10 +544,13 @@ itself signals SBR at all, since ADTS carries no `AudioSpecificConfig`
 extension fields. `ffmpeg`'s own decoder recognises this file as HE-AAC
 and reports 44100 Hz output purely by finding an `EXT_SBR_DATA`/
 `EXT_SBR_DATA_CRC` extension payload inside the frame — confirming
-`raw_data_block`'s `FIL` element (already parsed structurally by #444,
-currently skipped wholesale by its own declared byte count) is exactly
-where implicit detection has to happen, and that this cannot be resolved
-at the configuration layer alone for a raw-ADTS stream.
+`raw_data_block`'s `FIL` element is exactly where implicit detection has to
+happen, and that cannot be resolved at the configuration layer alone for a
+raw-ADTS stream. It now reads the first `extension_type` nibble: Table 4.121's
+`EXT_SBR_DATA`/`EXT_SBR_DATA_CRC` values 13/14 return a named
+`Error::Unsupported` before any AAC-LC frame is reconstructed. Other fill
+payloads retain their exact declared-length skip. This is deliberately a
+refusal boundary, not SBR parsing or HE-AAC PCM support.
 
 ## Decode accuracy — measured, not claimed
 
@@ -752,9 +752,9 @@ plausible-looking implementation that a real bitstream falsifies.
   parse correctly), HF generation and envelope adjustment were not
   attempted — each is a substantial remaining piece, not blocked on
   anything found this pass. `DecoderConfig::from_audio_specific_config`
-  still rejects `cfg.has_sbr()`; implicit signalling (SBR data inside a
-  `FIL` element with no `AudioSpecificConfig` hint at all) is not detected
-  either, since detecting it usefully requires the same downstream
+  still rejects `cfg.has_sbr()`. Implicit signalling (SBR data inside a
+  `FIL` element with no `AudioSpecificConfig` hint) is also rejected by name
+  before frame output; decoding it still requires the same downstream
   pipeline.
 - **Intensity stereo always assumes the in-phase codebook
   (`INTENSITY_HCB`).** Both intensity codebooks (in-phase `INTENSITY_HCB`
@@ -896,13 +896,12 @@ plausible-looking implementation that a real bitstream falsifies.
   the primary text during this pass but not transcribed into code, so
   that reading is not yet captured anywhere except this doc and should be
   redone against the primary text directly rather than trusted from
-  memory. `raw_data_block.rs`'s `FIL` element (`skip_fill_element`) is
-  where `extension_payload()`'s `extension_type` needs to be inspected
-  for `EXT_SBR_DATA`/`EXT_SBR_DATA_CRC` (values `0b1101`/`0b1110`, Table
-  4.121) instead of being skipped wholesale — note the sibling `SCE`/`CPE`
-  a `FIL`'s SBR data belongs to needs tracking across the element loop,
-  since `sbr_extension_data(id_aac, crc_flag)`'s `id_aac` selects
-  `sbr_single_channel_element()` vs `sbr_channel_pair_element()`.
+  memory. `raw_data_block.rs` now inspects `extension_payload()`'s
+  `extension_type` and refuses `EXT_SBR_DATA`/`EXT_SBR_DATA_CRC` (values
+  `0b1101`/`0b1110`, Table 4.121). Full parsing still needs the sibling
+  `SCE`/`CPE` a `FIL`'s SBR data belongs to tracked across the element loop,
+  since `sbr_extension_data(id_aac, crc_flag)` selects
+  `sbr_single_channel_element()` versus `sbr_channel_pair_element()`.
 - **If a future QMF change ever needs re-verifying:** round-trip an
   impulse first, not a tone. `qmf.rs`'s own module doc explains why a
   sustained tone's correlation against a lagged copy of itself is
@@ -962,7 +961,7 @@ Table 4.A.89 (QMF window coefficients), Annex §4.A.6.1 and Tables
 4.A.78-4.A.88 (SBR Huffman tables and their `(df_env_flag, df_noise_flag,
 amp_res, LAV)` parameters, `sbr_huffman_tables.rs`), §1.6.5.2 (implicit
 and explicit SBR signalling, confirmed against real content — see "SBR
-(#446)" above), Table 4.121 (`extension_type` values, needed for the
-not-yet-implemented `FIL`-element SBR detection), and Tables 4.57/4.62-4.74
+(#446)" above), Table 4.121 (`extension_type` values used by the
+`FIL`-element implicit-SBR refusal), and Tables 4.57/4.62-4.74
 (the `sbr_data()` syntax read during this pass but not yet transcribed
 into code).
