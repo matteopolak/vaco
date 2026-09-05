@@ -390,6 +390,27 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         )
         .expect("first tile second PU carries an explicit-MPM prefix bin");
     assert!(first_second_mpm_prefix);
+    let first_second_mpm_suffix = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_leaf_second_mpm_idx_suffix(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile second PU carries its MPM suffix bin");
+    assert!(first_second_mpm_suffix);
+    let second_second_mpm_suffix_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_leaf_second_mpm_idx_suffix(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no second PU MPM suffix");
+    assert!(matches!(
+        second_second_mpm_suffix_error,
+        Error::Unsupported("vaco-codec-hevc: first tile second PU has no mpm_idx suffix bin")
+    ));
     let second_second_mpm_error = tile_states
         .get_mut(1)
         .expect("second tile state exists")
