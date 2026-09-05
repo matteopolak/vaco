@@ -110,6 +110,29 @@ VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
 It is the coverage generator: there is no second hand-maintained list to drift
 from `-filters`.
 
+### Gated-runner preflight
+
+`vaco-bench machine-check` is the fail-closed preflight for the future whole-
+pipeline macro suite. It only observes the host; changing machine state remains
+an administrator action. A successful result requires Linux evidence for every
+plan 12 §4.4 control: `performance` governor on every online CPU, disabled
+turbo and SMT, this process pinned to exactly one CPU, that CPU in `nohz_full`,
+ASLR disabled, and no IRQ affinity list that includes the pinned CPU. It also
+records the transparent-huge-page setting, thermal-zone readings, and kernel
+release without treating unavailable sensors as a pass.
+
+The command exits `2` if a required file is inaccessible, a setting differs,
+or the host is not Linux. That is intentional: a local filter-tracker row can
+still be useful context, but it must never become a macro-regression baseline
+until a dedicated runner has supplied all controls. For example, macOS fails
+with an explicit unsupported-controlled-runner diagnostic rather than deriving
+cycles from elapsed time.
+
+```sh
+CARGO_INCREMENTAL=0 RUSTC_WRAPPER= cargo run --release -p vaco-bench --locked \
+  --target-dir /private/tmp/vaco-bench-target -- machine-check
+```
+
 ## CI result tracking
 
 `.github/workflows/filter-benchmarks.yml` has two paths:
@@ -156,6 +179,10 @@ batches raise the calibration target to at least 20 ms. `VACO_BENCH_MACHINE`
 overrides the machine label used by CI; the CPU and toolchain still have to
 match independently. `VACO_BENCH_PERF` overrides the `perf` executable on
 Linux, for example when the matching kernel-tools binary is not on `PATH`.
+
+`machine-check` accepts no options. It reads the live `/proc` and `/sys` views;
+there are deliberately no environment-variable overrides that could turn a
+missing hardware control into a passing result.
 
 `report` accepts `--input`, `--output`, optional `--generated-unix-ms`, and
 `--fail-under` (default `0.95`). Its input is combined schema-1 filter JSONL;

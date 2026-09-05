@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Registry-complete benchmark measurement and comparison.
 
+mod machine_control;
 mod perf_stat;
 mod report;
 
@@ -18,6 +19,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 use perf_stat::BatchCommand;
+
+pub use machine_control::{MachineCheck, MachineControlReport, verify_machine_control};
 
 const TRAILING_BASELINES: usize = 7;
 const PERF_STAT_MIN_BATCH_NS: u64 = 20_000_000;

@@ -7,7 +7,8 @@ use std::process::ExitCode;
 
 use vaco_bench::{
     BenchError, ChildBatchMode, FilterBenchConfig, MeasurementBackend, apply_baseline,
-    filter_cases, regressions, run_filter_child_batch, run_filter_suite, write_jsonl, write_report,
+    filter_cases, regressions, run_filter_child_batch, run_filter_suite, verify_machine_control,
+    write_jsonl, write_report,
 };
 
 fn main() -> ExitCode {
@@ -30,6 +31,7 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Some(command) if command == "machine-check" => run_machine_check(args),
         Some(command) if command == "__filter-batch" => run_filter_child(args),
         Some(command) if command == "filter" => run_filter(args),
         Some(command) if command == "report" => run_report(args),
@@ -44,6 +46,27 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
             usage()
         ))),
         None => Err(CliError::Usage(usage().to_owned())),
+    }
+}
+
+fn run_machine_check(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
+    reject_extra(args)?;
+    let report = verify_machine_control();
+    for check in report.checks() {
+        let status = if check.passed { "ok" } else { "fail" };
+        let requirement = if check.required {
+            "required"
+        } else {
+            "recorded"
+        };
+        println!("{status} {requirement} {}: {}", check.name, check.detail);
+    }
+    if report.is_ready() {
+        println!("machine control: ready for gating results");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        eprintln!("machine control: not ready; {}", report.failure_summary());
+        Ok(ExitCode::from(2))
     }
 }
 
@@ -347,7 +370,7 @@ fn print_usage() {
 }
 
 fn usage() -> &'static str {
-    "usage: vaco-bench list\n       vaco-bench filter [options]\n       vaco-bench report [options]"
+    "usage: vaco-bench list\n       vaco-bench machine-check\n       vaco-bench filter [options]\n       vaco-bench report [options]"
 }
 
 fn filter_usage() -> &'static str {

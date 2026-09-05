@@ -32,6 +32,20 @@ fn list_is_registry_complete() {
     assert_eq!(listed, expected);
 }
 
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn machine_check_fails_closed_off_a_controlled_linux_runner() {
+    let output = command()
+        .arg("machine-check")
+        .output()
+        .expect("run machine check command");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 error output");
+    assert!(stderr.contains("not ready"));
+    assert!(stderr.contains("controlled Linux reference runner"));
+}
+
 #[test]
 fn hidden_child_control_runs_one_registry_derived_batch() {
     let list = command().arg("list").output().expect("run list command");
