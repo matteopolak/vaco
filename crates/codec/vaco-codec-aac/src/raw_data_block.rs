@@ -14,9 +14,10 @@
 //!   data, or an SBR/other extension payload nested in a `FIL`) sums to
 //!   exactly that many bytes by construction, so skipping the count is
 //!   bit-exact without decoding what is inside it.
-//! - `PCE`: parsed in full ([`crate::pce::ProgramConfigElement`]) but not
-//!   yet threaded back into a pending [`crate::config::DecoderConfig`] — see
-//!   "Known gaps" in `docs/codec/vaco-codec-aac.md`.
+//! - `PCE`: parsed in full ([`crate::pce::ProgramConfigElement`]). The
+//!   decoder consumes a leading PCE while resolving a pending configuration;
+//!   a PCE found after audio elements is refused rather than ignored under a
+//!   stale configuration — see `docs/codec/vaco-codec-aac.md`.
 //! - `CCE` (`coupling_channel_element()`): **not implemented** —
 //!   `Error::Unsupported`. It carries its own `individual_channel_stream()`
 //!   plus a per-coupled-element gain list this crate has not transcribed,

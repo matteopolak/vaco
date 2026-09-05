@@ -101,7 +101,7 @@ impl AacDecoder {
     /// config element (`channelConfiguration == 0`), try to clear that from
     /// the body's own leading bits too.
     fn resolve_packet<'a>(&mut self, payload: &'a [u8]) -> Result<(DecoderConfig, &'a [u8])> {
-        let (mut cfg, body) = if let Some(cfg) = &self.extradata_config {
+        let (mut cfg, mut body) = if let Some(cfg) = &self.extradata_config {
             (cfg.clone(), payload)
         } else {
             let header = AdtsHeader::parse(payload)?;
@@ -118,9 +118,19 @@ impl AacDecoder {
         });
         if cfg.is_pending() {
             let mut r = BitReader::new(body);
-            if !cfg.try_resolve_pending(&mut r)?
-                && let Some(cached) = cached_pce_config
-            {
+            if cfg.try_resolve_pending(&mut r)? {
+                if !r.is_aligned() {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-aac: leading program_config_element is not byte-aligned",
+                    ));
+                }
+                let pce_bytes = usize::try_from(r.bit_pos() >> 3).map_err(|_| {
+                    Error::InvalidData("vaco-codec-aac: leading program_config_element is too long")
+                })?;
+                body = body.get(pce_bytes..).ok_or(Error::InvalidData(
+                    "vaco-codec-aac: leading program_config_element exceeds packet body",
+                ))?;
+            } else if let Some(cached) = cached_pce_config {
                 cfg = cached.clone();
             }
         }
@@ -236,6 +246,15 @@ impl Decoder for AacDecoder {
 
         let mut r = BitReader::new(body);
         let elements = raw_data_block::read(&mut r, sfi)?;
+        if elements
+            .iter()
+            .any(|element| matches!(element, Element::ProgramConfig(_)))
+        {
+            return Err(Error::Unsupported(
+                "vaco-codec-aac: mid-stream program_config_element() is not implemented — \
+                 refusing to decode with a stale channel configuration",
+            ));
+        }
 
         // Count output channels first, so `self.overlap` can be sized
         // before any element needs it.
@@ -541,6 +560,63 @@ mod tests {
         bytes
     }
 
+    fn adts_frame_with_mono_sce_then_pce() -> Vec<u8> {
+        use vaco_bitstream::BitWriter;
+        let mut body = BitWriter::new();
+        body.put(3, 0); // ID_SCE
+        body.put(4, 0); // element_instance_tag
+        body.put(8, 100); // global_gain
+        body.put(1, 0); // ics_reserved_bit
+        body.put(2, 0); // ONLY_LONG
+        body.put(1, 0); // sine window
+        body.put(6, 1); // max_sfb = 1
+        body.put(1, 0); // predictor_data_present
+        body.put(4, 0); // sect_cb = ZERO_HCB
+        body.put(5, 1); // sect_len = 1
+        body.put(1, 0); // pulse_data_present
+        body.put(1, 0); // tns_data_present
+        body.put(1, 0); // gain_control_data_present
+        body.put(3, 5); // ID_PCE
+        body.put(4, 0); // PCE element_instance_tag
+        body.put(2, 1); // PCE object_type = AAC-LC
+        body.put(4, 3); // PCE sampling_frequency_index = 48000 Hz
+        body.put(4, 1); // one front channel element
+        body.put(4, 0); // no side channel elements
+        body.put(4, 0); // no back channel elements
+        body.put(2, 0); // no LFE channel elements
+        body.put(3, 0); // no associated-data elements
+        body.put(4, 0); // no valid CC elements
+        body.put(1, 0); // no mono mixdown
+        body.put(1, 0); // no stereo mixdown
+        body.put(1, 0); // no matrix mixdown
+        body.put(1, 0); // front[0] is an SCE
+        body.put(4, 0); // front[0] tag
+        body.align_zero();
+        body.put(8, 0); // empty PCE comment field
+        body.put(3, 7); // ID_END
+        let body_bytes = body.finish();
+
+        let mut w = BitWriter::new();
+        w.put(12, 0xfff);
+        w.put(1, 0);
+        w.put(2, 0);
+        w.put(1, 1); // protection_absent
+        w.put(2, 1); // profile: LC
+        w.put(4, 3); // 48000
+        w.put(1, 0);
+        w.put(3, 0); // channelConfiguration: PCE supplies it
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(13, 7 + body_bytes.len() as u32); // aac_frame_length
+        w.put(11, 0x7ff);
+        w.put(2, 0);
+        let mut bytes = w.finish();
+        bytes.extend_from_slice(&body_bytes);
+        bytes
+    }
+
     #[test]
     fn an_all_zero_frame_produces_1024_silent_samples() {
         let mut dec = AacDecoder::new(Limits::permissive());
@@ -644,5 +720,24 @@ mod tests {
         assert_eq!(*samples, 1024);
         assert_eq!(planes.len(), 1);
         assert_eq!(layout.mask(), 0x4);
+    }
+
+    #[test]
+    fn a_mid_stream_pce_is_refused_not_silently_ignored() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let first = Packet::from_slice(&mut budget, &adts_frame_with_leading_mono_pce()).unwrap();
+        dec.send_packet(Some(&first)).unwrap();
+        let _ = dec.receive_frame().unwrap();
+
+        let mut budget = Budget::new(Limits::permissive());
+        let following =
+            Packet::from_slice(&mut budget, &adts_frame_with_mono_sce_then_pce()).unwrap();
+        let error = dec.send_packet(Some(&following)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("mid-stream program_config_element")
+        );
     }
 }

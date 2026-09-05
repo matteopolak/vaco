@@ -183,6 +183,14 @@ later leading PCE still takes precedence, so an in-band configuration change
 is not hidden by the cache; a cached PCE is reused only when object type,
 sample rate, and frame length still match the current ADTS header.
 
+The decoder consumes a leading PCE's exact byte span before it starts the
+`raw_data_block` element loop. A PCE that follows audio elements is explicitly
+rejected as `mid-stream program_config_element()` rather than silently ignored
+while decoding under a stale configuration. Supporting a mid-stream update
+requires carrying the new PCE through the in-flight configuration, output
+layout, channel order, and overlap state; none of those can safely be changed
+halfway through an already-decoded block.
+
 **Configurations 7, 11, 12 and 14 are rejected with
 `Error::Unsupported` rather than resolved from a recalled element ordering.**
 ISO/IEC 14496-3's Table 42 states the exact `SCE`/`CPE`/`LFE` sequence each of
@@ -583,6 +591,13 @@ frame layout (mask `0x0b`) as well as the exact three-plane/sample count. This
 matches `ffprobe`'s layout label without pretending that every PCE can use the
 same plane order.
 
+After the leading-PCE handoff was made explicit, a fresh one-second,
+three-non-silent-tone `2.1` fixture again reported 48 packets and produced
+**589,824 bytes** in each decoder. Its three plane correlations against
+`ffmpeg -bitexact` were −0.008787, −0.004685 and 0.000000 dB from unity.
+The same code now rejects a `program_config_element()` after audio elements
+with a named error rather than silently treating it as metadata.
+
 An independently generated 1.024-second, 48 kHz `quad` ADTS fixture exercised
 the front-`CPE` plus back-`CPE` PCE shape. `ffprobe` reported 48 packets and a
 `quad` layout; both decoders emitted **786,432 bytes** (48 packets × 1024
@@ -756,12 +771,11 @@ plausible-looking implementation that a real bitstream falsifies.
   substantial) package, per this issue's own dispatch.
 - **A mid-stream `PCE`** (an in-band `program_config_element()` found by
   `raw_data_block`'s own `ID_PCE` case, as opposed to the leading one
-  `DecoderConfig::try_resolve_pending` looks for) is parsed but not yet
-  threaded back into an in-flight `DecoderConfig` to update the channel
-  layout. A leading PCE is retained for later ADTS packets; this gap concerns
-  only PCEs that follow audio elements in a raw data block. Rare — a real
-  stream's PCE almost always leads its first frame — but a real gap, not yet
-  exercised by any fixture in this pass's corpus.
+  `DecoderConfig::try_resolve_pending` looks for) is not a live configuration
+  update yet. It is explicitly refused, so the decoder cannot silently apply
+  a stale layout/order/overlap state. A leading PCE is retained for later ADTS
+  packets; this limitation concerns only PCEs that follow audio elements in a
+  raw data block.
 - **PCE layouts whose element order differs from native output order** retain
   their channel count but are layout-unspecified. In particular, a centre
   `SCE` before a front `CPE` needs an explicit plane permutation before it can
