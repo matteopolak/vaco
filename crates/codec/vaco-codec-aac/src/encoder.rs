@@ -1,6 +1,6 @@
 //! A deliberately narrow AAC-LC ADTS silence encoder.
 //!
-//! It accepts one packed `S16` mono or stereo 24, 32, 44.1, or 48 kHz frame of
+//! It accepts one packed `S16` mono or stereo 22.05, 24, 32, 44.1, or 48 kHz frame of
 //! exactly 1024 zero samples per channel. It can return the raw AAC access unit
 //! and its exact `AudioSpecificConfig`, or wrap that unit in self-contained
 //! ADTS. General quantisation and psychoacoustics remain out of scope.
@@ -18,6 +18,7 @@ const SAMPLE_RATE_48_KHZ: u32 = 48_000;
 const SAMPLE_RATE_44_1_KHZ: u32 = 44_100;
 const SAMPLE_RATE_32_KHZ: u32 = 32_000;
 const SAMPLE_RATE_24_KHZ: u32 = 24_000;
+const SAMPLE_RATE_22_05_KHZ: u32 = 22_050;
 const SAMPLES_PER_FRAME: u32 = 1024;
 const ADTS_HEADER_BYTES: u32 = 7;
 const MONO_PACKED_S16_FRAME_BYTES: usize = 2048;
@@ -30,6 +31,8 @@ const MONO_32_KHZ_AUDIO_SPECIFIC_CONFIG: [u8; 2] = [0x12, 0x88];
 const STEREO_32_KHZ_AUDIO_SPECIFIC_CONFIG: [u8; 2] = [0x12, 0x90];
 const MONO_24_KHZ_AUDIO_SPECIFIC_CONFIG: [u8; 2] = [0x13, 0x08];
 const STEREO_24_KHZ_AUDIO_SPECIFIC_CONFIG: [u8; 2] = [0x13, 0x10];
+const MONO_22_05_KHZ_AUDIO_SPECIFIC_CONFIG: [u8; 2] = [0x13, 0x88];
+const STEREO_22_05_KHZ_AUDIO_SPECIFIC_CONFIG: [u8; 2] = [0x13, 0x90];
 
 /// A raw AAC-LC silence access unit paired with its out-of-band configuration.
 ///
@@ -50,7 +53,7 @@ impl AacLcSilenceAccessUnit {
     ///
     /// # Errors
     ///
-    /// Refuses any non-`S16`, non-24/32/44.1/48 kHz, non-mono/stereo,
+    /// Refuses any non-`S16`, non-22.05/24/32/44.1/48 kHz, non-mono/stereo,
     /// non-1024-sample, or nonzero PCM input.
     pub fn from_frame(frame: &Frame) -> Result<Self> {
         let (
@@ -187,15 +190,17 @@ fn silence_frame_configuration(frame: &Frame) -> Result<(u32, u32, u32, usize, [
         (SAMPLE_RATE_32_KHZ, 2) => (5, STEREO_32_KHZ_AUDIO_SPECIFIC_CONFIG),
         (SAMPLE_RATE_24_KHZ, 1) => (6, MONO_24_KHZ_AUDIO_SPECIFIC_CONFIG),
         (SAMPLE_RATE_24_KHZ, 2) => (6, STEREO_24_KHZ_AUDIO_SPECIFIC_CONFIG),
+        (SAMPLE_RATE_22_05_KHZ, 1) => (7, MONO_22_05_KHZ_AUDIO_SPECIFIC_CONFIG),
+        (SAMPLE_RATE_22_05_KHZ, 2) => (7, STEREO_22_05_KHZ_AUDIO_SPECIFIC_CONFIG),
         _ => {
             return Err(Error::Unsupported(
-                "vaco-codec-aac: only packed S16 mono or stereo 24/32/44.1/48 kHz silence can be encoded",
+                "vaco-codec-aac: only packed S16 mono or stereo 22.05/24/32/44.1/48 kHz silence can be encoded",
             ));
         }
     };
     if *format != SampleFmt::S16 || *samples != SAMPLES_PER_FRAME || planes.len() != 1 {
         return Err(Error::Unsupported(
-            "vaco-codec-aac: only packed S16 mono or stereo 24/32/44.1/48 kHz frames of exactly 1024 samples are supported",
+            "vaco-codec-aac: only packed S16 mono or stereo 22.05/24/32/44.1/48 kHz frames of exactly 1024 samples are supported",
         ));
     }
     Ok((
@@ -464,6 +469,16 @@ mod tests {
     }
 
     #[test]
+    fn three_22050_stereo_silent_frames_form_a_playable_adts_stream_with_exact_counts() {
+        assert_playable_adts_stream(ChannelLayout::STEREO, 22_050, 2);
+    }
+
+    #[test]
+    fn three_22050_mono_silent_frames_form_a_playable_adts_stream_with_exact_counts() {
+        assert_playable_adts_stream(ChannelLayout::MONO, 22_050, 1);
+    }
+
+    #[test]
     fn raw_stereo_access_unit_has_asc_and_decodes_with_both_paths() {
         let raw = AacLcSilenceAccessUnit::from_frame(&silence_frame(ChannelLayout::STEREO, 48_000))
             .unwrap();
@@ -585,6 +600,37 @@ mod tests {
             panic!("expected audio frame");
         };
         assert_eq!((sample_rate, samples, layout.channels), (24_000, 1024, 2));
+    }
+
+    #[test]
+    fn raw_22050_stereo_access_unit_has_matching_asc_and_decodes_with_both_paths() {
+        let raw = AacLcSilenceAccessUnit::from_frame(&silence_frame(ChannelLayout::STEREO, 22_050))
+            .unwrap();
+        assert_eq!(raw.audio_specific_config(), [0x13, 0x90]);
+        assert_playable_adts_bytes(
+            (0..3)
+                .flat_map(|_| adts_access_unit_for_raw(raw.payload(), 7, 2))
+                .collect(),
+            22_050,
+            2,
+        );
+
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, raw.payload()).unwrap();
+        let mut decoder = AacDecoder::new(Limits::permissive());
+        decoder.set_extradata(&raw.audio_specific_config()).unwrap();
+        decoder.send_packet(Some(&packet)).unwrap();
+        let decoded = decoder.receive_frame().unwrap();
+        let FrameData::Audio {
+            sample_rate,
+            samples,
+            layout,
+            ..
+        } = decoded.data
+        else {
+            panic!("expected audio frame");
+        };
+        assert_eq!((sample_rate, samples, layout.channels), (22_050, 1024, 2));
     }
 
     #[test]
