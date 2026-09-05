@@ -12,7 +12,7 @@
 //! correct output — this crate does not claim or chase bit-exactness).
 //!
 //! Known gaps, disclosed rather than silently approximated: `CCE`
-//! (coupling) is refused; `channelConfiguration` 11/14 are
+//! (coupling) is refused; `channelConfiguration` 14 is
 //! gated at the configuration layer; intensity stereo always assumes
 //! in-phase (`INTENSITY_HCB`), since `IcsStream` does not retain which of
 //! the two intensity codebooks a band used; the `LongStart`/`LongStop`
@@ -146,7 +146,7 @@ impl AacDecoder {
 /// Permute `channels` from `raw_data_block`'s syntactic element order into
 /// the conventional front-left-first output order for the
 /// `channelConfiguration` values this crate resolves without a program
-/// config element (`known_channel_count` in `crate::config`: 1 through 7, 12).
+/// config element (`known_channel_count` in `crate::config`: 1 through 7, 11, 12).
 ///
 /// The entry for each configuration is `output_index -> source_index`,
 /// derived from Table 1.19's syntactic element order (`SCE`, `CPE`, `CPE`,
@@ -172,10 +172,13 @@ impl AacDecoder {
 /// - 7 (7.1): syntactic order is `[C, L, R, Ls, Rs, Lb, Rb, LFE]`
 ///   (one `SCE`, three `CPE`s, one `LFE`); output order is
 ///   `[FL, FR, FC, LFE, BL, BR, SL, SR]`.
+/// - 11 (6.1 back): syntactic order is `[C, L, R, Lb, Rb, BC, LFE]`
+///   (two `SCE`s, two `CPE`s, one `LFE`); output order is
+///   `[FL, FR, FC, LFE, BL, BR, BC]`.
 /// - 12 (7.1): uses the same syntax and output order as 7.
 ///
 /// Any other `channel_configuration` (including PCE-explicit layouts whose
-/// element structure does not have a verified map, and the 11/14 values
+/// element structure does not have a verified map, and the 14 value
 /// gated at the configuration layer) is left in parsed order. Reordering by
 /// count alone would be a guess.
 fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configuration: u8) {
@@ -185,6 +188,7 @@ fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configu
         (5, 5) => &[1, 2, 0, 3, 4],
         (6, 6) => &[1, 2, 0, 5, 3, 4],
         (7 | 12, 8) => &[1, 2, 0, 7, 5, 6, 3, 4],
+        (11, 7) => &[1, 2, 0, 6, 3, 4, 5],
         _ => return,
     };
     reorder_channels(channels, perm);
@@ -285,6 +289,32 @@ mod output_order_tests {
                 vec![6.0],
                 vec![3.0],
                 vec![4.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn configuration_eleven_moves_each_direct_channel_to_native_order() {
+        let mut channels = vec![
+            vec![0.0],
+            vec![1.0],
+            vec![2.0],
+            vec![3.0],
+            vec![4.0],
+            vec![5.0],
+            vec![6.0],
+        ];
+        reorder_to_output_channel_order(&mut channels, 11);
+        assert_eq!(
+            channels,
+            vec![
+                vec![1.0],
+                vec![2.0],
+                vec![0.0],
+                vec![6.0],
+                vec![3.0],
+                vec![4.0],
+                vec![5.0],
             ]
         );
     }
