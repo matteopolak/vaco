@@ -2841,6 +2841,7 @@ dependencies = [
  "vaco-codec-dsp-deblock",
  "vaco-codec-dsp-idct",
  "vaco-codec-dsp-intrapred",
+ "vaco-codec-dsp-mc",
  "vaco-codec-golomb",
  "vaco-color",
  "vaco-core",
@@ -3823,6 +3824,7 @@ name = "vaco-filter-color"
 version = "0.1.0"
 dependencies = [
  "smallvec",
+ "vaco-color",
  "vaco-core",
  "vaco-expr",
  "vaco-filter-core",
@@ -3832,6 +3834,7 @@ dependencies = [
  "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
+ "vaco-scale",
 ]
 
 [[package]]
@@ -3870,6 +3873,7 @@ dependencies = [
 name = "vaco-filter-deinterlace"
 version = "0.1.0"
 dependencies = [
+ "divan",
  "proptest",
  "smallvec",
  "vaco-core",
@@ -3995,6 +3999,7 @@ dependencies = [
  "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
+ "vaco-scale",
 ]
 
 [[package]]
