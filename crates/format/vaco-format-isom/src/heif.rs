@@ -212,10 +212,11 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
             r.be32()
         };
         let construction_method = if full.version >= 1 {
-            match r.be16() & 0x0F {
+            match r.be16() {
+                0 => ConstructionMethod::FileOffset,
                 1 => ConstructionMethod::IdatOffset,
                 2 => ConstructionMethod::ItemOffset,
-                _ => ConstructionMethod::FileOffset,
+                _ => return Vec::new(),
             }
         } else {
             ConstructionMethod::FileOffset
@@ -559,6 +560,26 @@ mod tests {
         ];
         let raw = fullbx(b"iloc", 0, 0, &body);
         assert!(parse_iloc(&first_box(&raw)).is_empty());
+    }
+
+    #[test]
+    fn iloc_rejects_an_unknown_or_reserved_construction_method() {
+        for construction_method in [3u16, 0x10] {
+            let mut body = vec![
+                0x44, 0, // offset_size=4, length_size=4, base_offset_size=0
+                0, 1, // item_count
+                0, 1, // item_id
+            ];
+            body.extend_from_slice(&construction_method.to_be_bytes());
+            body.extend_from_slice(&[
+                0, 0, // data_reference_index
+                0, 1, // extent_count
+                0, 0, 0, 1, // extent_offset
+                0, 0, 0, 1, // extent_length
+            ]);
+            let raw = fullbx(b"iloc", 1, 0, &body);
+            assert!(parse_iloc(&first_box(&raw)).is_empty());
+        }
     }
 
     #[test]
