@@ -148,6 +148,36 @@ impl TileLayout {
         Ok(ranges)
     }
 
+    /// Borrow the first tile's coded substream for CABAC initialization.
+    ///
+    /// The returned bytes begin immediately after the aligned slice header;
+    /// `CabacDecoder::new` can therefore apply §9.3.1.2 directly. No bins are
+    /// consumed here, and an empty first range is refused before any decoder
+    /// state is constructed.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the range validation from
+    /// [`Self::tile_substream_byte_ranges`] and rejects an empty first range.
+    pub fn first_tile_substream<'a>(
+        &self,
+        data: &'a [u8],
+        entry_point_offsets: &[u32],
+    ) -> Result<&'a [u8]> {
+        let ranges = self.tile_substream_byte_ranges(data.len(), entry_point_offsets)?;
+        let (start, end) = ranges.first().copied().ok_or(Error::InvalidData(
+            "vaco-codec-hevc: tile substream is missing",
+        ))?;
+        if start == end {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile substream is empty",
+            ));
+        }
+        data.get(start..end).ok_or(Error::InvalidData(
+            "vaco-codec-hevc: tile substream range is invalid",
+        ))
+    }
+
     /// Return `(tile_id, tile-local raster CTB address)` for a CTB.
     ///
     /// The tile-local address is the address consumed by a tile substream,

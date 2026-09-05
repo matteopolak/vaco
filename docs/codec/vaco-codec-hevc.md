@@ -975,8 +975,9 @@ tile-local substreams, one entry-point offset, and that tile-local CTB
 addresses reset at the column boundary and that each tile's first CTB starts a
 fresh tile-local CABAC state. It also parses the real slice header
 and maps its one coded-byte entry-point length to the two half-open tile-scan
-ranges. Finally it sends the same access unit to `HevcDecoder` and requires
-exactly
+ranges, then initializes a fresh CABAC engine over the first range without
+consuming a bin. Finally it sends the same access unit to `HevcDecoder` and
+requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before any
 CABAC data is decoded. This keeps the parser's §7.3.2.3 tile syntax and the
 decoder's §6.5 geometry and §7.4.7.1 substream count exercised without

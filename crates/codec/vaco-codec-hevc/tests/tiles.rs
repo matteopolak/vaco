@@ -17,6 +17,7 @@
 )]
 
 use vaco_bitstream::BitReader;
+use vaco_codec_cabac::CabacDecoder;
 use vaco_codec_core::Decoder;
 use vaco_codec_hevc::{HevcDecoder, TileLayout};
 use vaco_core::Error;
@@ -144,7 +145,7 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         .expect("fixture tile geometry is valid");
     let mut budget = Budget::new(limits);
     let mut rbsp = RbspBuf::new();
-    let (header, data_len) = units(HEVC, Framing::AnnexB)
+    let (header, slice_data) = units(HEVC, Framing::AnnexB)
         .find_map(|nal| {
             let nal_header = HevcNalHeader::parse(nal.data)?;
             if !nal_header.nal_unit_type.has_slice_header() {
@@ -156,18 +157,24 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
             let header =
                 SliceHeader::parse_data(&mut reader, nal_header, sps, pps, &mut budget).ok()?;
             let header_len = usize::try_from(reader.bit_pos().div_ceil(8)).ok()?;
-            Some((header, nal.data.len().saturating_sub(header_len)))
+            Some((header, nal.data.get(header_len..)?))
         })
         .expect("fixture has a parseable VCL slice header");
     assert_eq!(header.entry_point_offsets.len(), 1);
     let ranges = layout
-        .tile_substream_byte_ranges(data_len, &header.entry_point_offsets)
+        .tile_substream_byte_ranges(slice_data.len(), &header.entry_point_offsets)
         .expect("fixture entry point partitions both tile substreams");
     assert_eq!(
         ranges,
         vec![
             (0, header.entry_point_offsets[0] as usize),
-            (header.entry_point_offsets[0] as usize, data_len)
+            (header.entry_point_offsets[0] as usize, slice_data.len())
         ]
     );
+    let first_tile_data = layout
+        .first_tile_substream(slice_data, &header.entry_point_offsets)
+        .expect("first tile substream is non-empty");
+    let cabac = CabacDecoder::new(first_tile_data);
+    assert_eq!(cabac.range(), 510);
+    assert!(!cabac.malformed());
 }
