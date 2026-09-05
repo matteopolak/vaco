@@ -34,6 +34,15 @@ pub(crate) const ITEM_TIME_BASE: Rational = Rational::new(1, 1);
 /// bytes; this is a bound on a corrupt `iloc`, not a real maximum.
 const MAX_GRID_DESCRIPTOR_BYTES: u64 = 64;
 
+/// Property types whose semantics this item path or the shared sample-entry
+/// path consumes. An unknown essential property makes the item unusable.
+const fn supports_essential_property(kind: FourCc) -> bool {
+    matches!(
+        kind,
+        bt::ISPE | bt::AVCC | bt::HVCC | bt::VVCC | bt::AV1C | bt::VPCC | bt::PASP | bt::COLR
+    )
+}
+
 /// What one `meta` box yielded.
 pub(crate) struct ItemStreams {
     pub streams: Vec<Stream>,
@@ -178,13 +187,10 @@ impl<'a> Meta<'a> {
                 bt::IPRP => {
                     me.ipco = heif::parse_ipco(&child);
                     me.ipma = heif::parse_ipma(&child)?;
-                    if me
-                        .ipma
-                        .iter()
-                        .flat_map(|association| association.properties.iter())
-                        .any(|&(_, index)| usize::from(index) > me.ipco.len())
-                    {
-                        return None;
+                    for association in &me.ipma {
+                        for &(_, index) in &association.properties {
+                            me.ipco.get(usize::from(index).checked_sub(1)?)?;
+                        }
                     }
                 }
                 bt::IREF => me.irefs = heif::parse_iref(&child),
@@ -207,6 +213,23 @@ impl<'a> Meta<'a> {
                 .and_then(|i| self.ipco.get(i))?;
             (bx.kind() == kind).then_some(bx)
         })
+    }
+
+    /// Whether every essential property associated with this item is one the
+    /// item or sample-entry path knows how to apply.
+    fn supports_item(&self, item_id: u32) -> bool {
+        self.ipma
+            .iter()
+            .find(|association| association.item_id == item_id)
+            .is_none_or(|association| {
+                association.properties.iter().all(|&(essential, index)| {
+                    !essential
+                        || usize::from(index)
+                            .checked_sub(1)
+                            .and_then(|index| self.ipco.get(index))
+                            .is_some_and(|property| supports_essential_property(property.kind()))
+                })
+            })
     }
 
     /// An item's extents as absolute file ranges. `None` for an item this
@@ -274,6 +297,9 @@ impl<'a> Meta<'a> {
     /// this crate's sample-entry table knows, so a derived or metadata item
     /// never becomes a stream nobody can decode.
     fn coded_stream(&self, info: &ItemInfo, index: u32, budget: &Budget) -> Option<Stream> {
+        if !self.supports_item(info.item_id) {
+            return None;
+        }
         let (width, height) = self.ispe(info.item_id).unwrap_or((0, 0));
         let extensions = self.properties(info.item_id);
         let entry = SampleEntry {
@@ -341,6 +367,9 @@ impl<'a> Meta<'a> {
         file_size: Option<u64>,
         read: &mut dyn FnMut(&[(u64, u64)]) -> Option<Vec<u8>>,
     ) -> Option<StreamGroup> {
+        if !self.supports_item(info.item_id) {
+            return None;
+        }
         let location = self.location(info.item_id)?;
         let extents = self.resolve(location, file_size)?;
         let total: u64 = extents.iter().map(|e| e.1).sum();

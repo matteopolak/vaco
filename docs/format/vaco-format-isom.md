@@ -789,8 +789,10 @@ Named so the demuxer's author knows what is not here:
   `construction_method` is exactly `0`, `1`, or `2` (including zero reserved
   bits). `ipma` accepts only its version `0`/`1` item-ID layouts, refuses its
   invalid zero property index. The item resolver also checks each association
-  against the available `ipco` property list, and a malformed present table is
-  distinct from an absent one; `infe` only versions `0` through `3`. `iinf`'s
+  against the available `ipco` property list. The item resolver discards an
+  item with an essential property whose type it cannot apply; a malformed
+  present table is distinct from an absent one. `infe` only versions `0`
+  through `3`. `iinf`'s
   declared entry count also bounds
   the `infe` children it exposes, and a truncated `iref` record contributes
   no partial item graph edge. A truncated `iloc` header or declared extent

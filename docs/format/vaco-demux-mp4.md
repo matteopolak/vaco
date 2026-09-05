@@ -821,8 +821,9 @@ crate decides what becomes a stream:
   the item's `ipco` properties are re-serialised as the entry's extension
   boxes, because `av1C`/`hvcC`/`colr`/`pasp`/`pixi` are literally the same
   boxes in both worlds. A malformed present `ipma` table, including an index
-  beyond its `ipco` property list, refuses the item file rather than applying
-  a partial property configuration. `ispe` supplies the size; an item with no
+  beyond its `ipco` property list refuses the item file rather than applying
+  a partial property configuration. An essential property the resolver cannot
+  apply discards only its associated item. `ispe` supplies the size; an item with no
   `pasp`
   reports `sample_aspect_ratio 1:1` (measured — the reference prints `1:1`
   for an AVIF item where the same codec in a track prints nothing).

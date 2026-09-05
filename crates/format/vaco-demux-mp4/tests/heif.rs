@@ -337,6 +337,30 @@ fn an_out_of_range_property_association_refuses_the_item_file() {
 }
 
 #[test]
+fn an_unknown_essential_property_discards_only_its_item() {
+    let mut bytes = heif();
+    let property = bytes.windows(4).position(|w| w == b"ispe").unwrap();
+    bytes[property..property + 4].copy_from_slice(b"zzzz");
+    let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
+    // The first property is now both unknown and essential.
+    bytes[ipma + 15] = 0x81;
+    let demux = open(bytes);
+    assert_eq!(
+        demux
+            .streams()
+            .iter()
+            .map(|stream| stream.id)
+            .collect::<Vec<_>>(),
+        vec![Some(2), Some(4)],
+        "the unknown essential property discards item 1, not its siblings"
+    );
+    assert!(
+        demux.stream_groups().is_empty(),
+        "the grid cannot name every referenced tile after item 1 is discarded"
+    );
+}
+
+#[test]
 fn a_meta_box_that_is_not_pict_is_still_no_movie() {
     let mut bytes = heif();
     // Flip the handler to `mdta`: a QuickTime metadata `meta`, not items.
