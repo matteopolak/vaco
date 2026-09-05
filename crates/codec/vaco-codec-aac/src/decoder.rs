@@ -12,7 +12,7 @@
 //! correct output — this crate does not claim or chase bit-exactness).
 //!
 //! Known gaps, disclosed rather than silently approximated: `CCE`
-//! (coupling) is refused; `channelConfiguration` 3/4/5/7/11/12/14 are
+//! (coupling) is refused; `channelConfiguration` 3/4/7/11/12/14 are
 //! gated at the configuration layer; intensity stereo always assumes
 //! in-phase (`INTENSITY_HCB`), since `IcsStream` does not retain which of
 //! the two intensity codebooks a band used; the `LongStart`/`LongStop`
@@ -136,7 +136,7 @@ impl AacDecoder {
 /// Permute `channels` from `raw_data_block`'s syntactic element order into
 /// the conventional front-left-first output order for the
 /// `channelConfiguration` values this crate resolves without a program
-/// config element (`known_channel_count` in `crate::config`: 1, 2, 6).
+/// config element (`known_channel_count` in `crate::config`: 1, 2, 5, 6).
 ///
 /// The entry for each configuration is `output_index -> source_index`,
 /// derived from Table 1.19's syntactic element order (`SCE`, `CPE`, `CPE`,
@@ -145,6 +145,8 @@ impl AacDecoder {
 ///
 /// - 1 (mono, centre only) and 2 (stereo, front L/R): already in output
 ///   order — the single `SCE` or `CPE` maps straight through.
+/// - 5 (5.0): syntactic order is `[C, L, R, Ls, Rs]` (one `SCE`, one front
+///   `CPE`, one back `CPE`); output order is `[FL, FR, FC, BL, BR]`.
 /// - 6 (5.1): syntactic order is `[C, L, R, Ls, Rs, LFE]` (one `SCE`, one
 ///   front `CPE`, one back `CPE`, one `LFE`); output order is
 ///   `[FL, FR, FC, LFE, BL, BR]`. Confirmed empirically against
@@ -155,11 +157,12 @@ impl AacDecoder {
 ///   while the reference's channel 0 held front-left silence.
 ///
 /// Any other `channel_configuration` (including 0/PCE-explicit, and the
-/// 3/4/5/7/11/12/14 values gated at the configuration layer) is left in
+/// 3/4/7/11/12/14 values gated at the configuration layer) is left in
 /// its parsed order — this crate does not yet know their intended output
 /// order, and reordering by count alone would be a guess.
 fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configuration: u8) {
     let perm: &[usize] = match (channel_configuration, channels.len()) {
+        (5, 5) => &[1, 2, 0, 3, 4],
         (6, 6) => &[1, 2, 0, 5, 3, 4],
         _ => return,
     };
@@ -168,6 +171,21 @@ fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configu
         .map(|&i| channels.get_mut(i).map(std::mem::take).unwrap_or_default())
         .collect();
     *channels = reordered;
+}
+
+#[cfg(test)]
+mod output_order_tests {
+    use super::reorder_to_output_channel_order;
+
+    #[test]
+    fn five_zero_moves_the_centre_after_the_front_pair() {
+        let mut channels = vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0], vec![4.0]];
+        reorder_to_output_channel_order(&mut channels, 5);
+        assert_eq!(
+            channels,
+            vec![vec![1.0], vec![2.0], vec![0.0], vec![3.0], vec![4.0]]
+        );
+    }
 }
 
 impl Decoder for AacDecoder {

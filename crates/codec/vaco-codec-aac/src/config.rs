@@ -19,11 +19,11 @@
 //!
 //! # Channel-configuration coverage
 //!
-//! `channelConfiguration` 1 (mono), 2 (stereo) and 6 (5.1) are resolved
+//! `channelConfiguration` 1 (mono), 2 (stereo), 5 (5.0) and 6 (5.1) are resolved
 //! directly — by far the overwhelming majority of real AAC-LC content, and
-//! the three configurations this workspace could confidently state the exact
+//! the four configurations this workspace could confidently state the exact
 //! `SCE`/`CPE`/`LFE` element ordering for without needing the ISO/IEC
-//! 14496-3 Table 42 text on hand for the rarer ones (3, 4, 5, 7, 11, 12, 14)
+//! 14496-3 Table 42 text on hand for the rarer ones (3, 4, 7, 11, 12, 14)
 //! to check rather than recall. Those rarer configurations are rejected with
 //! [`Error::Unsupported`] rather than guessed at — a wrong element-count
 //! assumption there would desync every channel element's decode after the
@@ -75,12 +75,13 @@ impl ChannelResolution {
 }
 
 /// The subset of `channelConfiguration` values this crate resolves without a
-/// program config element. See the module doc for why 3/4/5/7/11/12/14 are
+/// program config element. See the module doc for why 3/4/7/11/12/14 are
 /// deliberately absent rather than guessed.
 fn known_channel_count(channel_configuration: u8) -> Option<u32> {
     match channel_configuration {
         1 => Some(1),
         2 => Some(2),
+        5 => Some(5),
         6 => Some(6),
         _ => None,
     }
@@ -144,7 +145,7 @@ impl DecoderConfig {
             None if header.channel_configuration == 0 => ChannelResolution::Pending,
             None => {
                 return Err(Error::Unsupported(
-                    "vaco-codec-aac: channel_configuration 3/4/5/7/11/12/14 are not \
+                    "vaco-codec-aac: channel_configuration 3/4/7/11/12/14 are not \
                      resolved without ISO/IEC 14496-3 Table 42's exact element \
                      ordering on hand to verify against — gated rather than guessed \
                      (see docs/codec/vaco-codec-aac.md)",
@@ -187,7 +188,7 @@ impl DecoderConfig {
             None if cfg.channel_configuration == 0 => ChannelResolution::Pending,
             None => {
                 return Err(Error::Unsupported(
-                    "vaco-codec-aac: channel_configuration 3/4/5/7/11/12/14 are not \
+                    "vaco-codec-aac: channel_configuration 3/4/7/11/12/14 are not \
                      resolved without ISO/IEC 14496-3 Table 42's exact element \
                      ordering on hand to verify against — gated rather than guessed \
                      (see docs/codec/vaco-codec-aac.md)",
@@ -332,6 +333,16 @@ mod tests {
     fn aac_lc_51_resolves_directly() {
         let cfg = parse(2, 6).unwrap();
         assert_eq!(cfg.channels, ChannelResolution::Known { count: 6 });
+    }
+
+    #[test]
+    fn aac_lc_50_resolves_directly() {
+        let cfg = parse(2, 5).unwrap();
+        assert_eq!(cfg.channels, ChannelResolution::Known { count: 5 });
+        assert_eq!(
+            cfg.output_layout().and_then(|layout| layout.name()),
+            Some("5.0")
+        );
     }
 
     #[test]
