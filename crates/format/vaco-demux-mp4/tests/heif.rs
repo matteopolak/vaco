@@ -429,6 +429,25 @@ fn duplicate_item_info_ids_refuse_the_item_file() {
 }
 
 #[test]
+fn a_truncated_iinf_entry_table_refuses_the_item_file() {
+    let mut bytes = heif();
+    let iinf = bytes.windows(4).position(|w| w == b"iinf").unwrap();
+    // Declare one more `infe` than the box contains. Treating the four actual
+    // entries as complete would silently accept a truncated item catalogue.
+    bytes[iinf + 9] = 5;
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    assert!(
+        Mp4Demuxer::open(
+            src,
+            &NoParsers,
+            &FormatOptions::default(),
+            Mp4Options::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn duplicate_item_location_ids_refuse_the_item_table() {
     let mut bytes = heif();
     let iloc = bytes.windows(4).position(|w| w == b"iloc").unwrap();

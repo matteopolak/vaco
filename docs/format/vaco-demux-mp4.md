@@ -830,7 +830,9 @@ crate decides what becomes a stream:
   duplicate `iloc` item ID likewise refuses the item file rather than letting
   first-match range resolution select arbitrary item bytes. A present `pitm`
   primary ID must name a declared image item, rather than
-  silently leaving all streams non-default. An
+  silently leaving all streams non-default. An `iinf` table must contain every
+  declared, valid `infe` entry: a truncated catalogue is refused rather than
+  treated as its valid prefix. An
   ordered association may still name an entity group rather than an `iinf`
   item. Duplicate `dimg` records from one grid are malformed rather than an
   invitation to select the first tile graph. An essential property the resolver cannot

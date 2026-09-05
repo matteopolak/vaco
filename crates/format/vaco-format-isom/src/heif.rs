@@ -110,16 +110,28 @@ pub fn parse_iinf(iinf: &IsoBox<'_>) -> Vec<ItemInfo> {
     if r.overrun() {
         return Vec::new();
     }
-    iinf.children_after(4usize.saturating_add(count_width))
+    let expected = usize::try_from(entry_count)
+        .unwrap_or(MAX_ITEMS)
+        .min(MAX_ITEMS);
+    let mut infos = Vec::new();
+    for entry in iinf
+        .children_after(4usize.saturating_add(count_width))
         .flatten()
-        .take(
-            usize::try_from(entry_count)
-                .unwrap_or(MAX_ITEMS)
-                .min(MAX_ITEMS),
-        )
-        .filter(|b| b.kind() == boxes::INFE)
-        .filter_map(|b| ItemInfo::parse(&b))
-        .collect()
+        .take(expected)
+    {
+        if entry.kind() != boxes::INFE {
+            return Vec::new();
+        }
+        let Some(info) = ItemInfo::parse(&entry) else {
+            return Vec::new();
+        };
+        infos.push(info);
+    }
+    if infos.len() == expected {
+        infos
+    } else {
+        Vec::new()
+    }
 }
 
 /// `pitm` — the primary item id.
@@ -606,6 +618,20 @@ mod tests {
         let infe = fullbx(b"infe", 2, 0, &hex_bytes("0001000061763031436f6c6f7200"));
         let iinf = fullbx(b"iinf", 0, 0, &[&[0, 0], infe.as_slice()].concat());
         assert!(parse_iinf(&first_box(&iinf)).is_empty());
+    }
+
+    #[test]
+    fn iinf_refuses_a_declared_entry_that_is_missing_or_invalid() {
+        let valid = fullbx(b"infe", 2, 0, &hex_bytes("0001000061763031436f6c6f7200"));
+        let invalid = fullbx(b"infe", 4, 0, &hex_bytes("0001000061763031436f6c6f7200"));
+        for children in [
+            [valid.as_slice()].concat(),
+            [valid.as_slice(), invalid.as_slice()].concat(),
+        ] {
+            let body = [2u16.to_be_bytes().as_slice(), children.as_slice()].concat();
+            let iinf = fullbx(b"iinf", 0, 0, &body);
+            assert!(parse_iinf(&first_box(&iinf)).is_empty());
+        }
     }
 
     #[test]
