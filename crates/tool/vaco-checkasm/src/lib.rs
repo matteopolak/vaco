@@ -52,16 +52,15 @@
 //! assert!(report.is_clean(), "{report}");
 //! ```
 //!
-//! # Why cross-tier coverage is per-machine, not per-run
+//! # Cross-tier coverage without fabricated capabilities
 //!
 //! [`Kernel::vector`] should call through a [`vaco_simd::KernelSet`]'s
-//! `select()` table (resolved from [`vaco_simd::Caps::detect`]), so the tier
-//! actually under test is whichever one the CPU running the check has.
-//! Forcing a *weaker* tier on stronger hardware would need a capability token
-//! fabricated without evidence — every `assume_supported` in `fearless_simd`
-//! is `unsafe`, which D2 closes to us — so there is no way to make one
-//! process exercise every tier. Coverage of SSE2 through AVX-512 and NEON
-//! accumulates across the machines CI actually runs on.
+//! `select()` table for its ordinary production case. A differential matrix
+//! may additionally use [`vaco_simd::Caps::capped_at`] to exercise every
+//! weaker tier that the current CPU genuinely supports. The token remains
+//! derived from runtime detection; it is never fabricated through an unsafe
+//! `assume_supported` call. Coverage across x86 and AArch64 still accumulates
+//! across the machines CI actually runs on.
 //!
 //! See [`kernels`] for a real kernel wired through this crate as a worked
 //! example and as the `verify` CLI's own self-check.

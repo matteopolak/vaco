@@ -114,19 +114,26 @@ still collects whole-process counts for Vaco and ffmpeg. It measures a
 different scope from checkasm's per-adapter rows, so neither its process totals
 nor an `Instant` fallback may be relabelled as per-kernel cycles.
 
-### Why cross-tier coverage is per-machine, not per-run
+### Cross-tier coverage without fabricated capabilities
 
-`Kernel::vector` should route through a `vaco_simd::KernelSet`'s `select()`
-table, so the tier actually exercised is whichever one
-`vaco_simd::Caps::detect()` resolves to on the machine running the check.
-Forcing a *weaker* tier on stronger hardware needs a capability token
-fabricated without runtime evidence — every `assume_supported` in
-`fearless_simd` is `unsafe`, closed to us by D2 — so one process cannot sweep
-every tier. Coverage of SSE2 through AVX-512 and NEON accumulates across the
-machines CI actually runs on, not within a single invocation. If a future
-consumer genuinely needs same-process multi-tier coverage, that is a new,
-separately-reviewed capability, not something to route around this
-constraint for.
+The default adapter still routes through a `KernelSet::select()` table and
+therefore exercises the CPU's highest detected tier. A kernel that needs a
+same-process tier matrix may call `Caps::detect().capped_at(tier)`: it returns
+a token only when that weaker tier belongs to the current architecture and is
+actually supported. No `assume_supported`, `unsafe`, or invented capability
+is involved. H.264 MC uses this form to cover Scalar plus every available x86
+tier, or Scalar plus NEON, in one differential run. CI across architectures
+still supplies the complete SSE2-through-AVX-512-and-NEON matrix.
+
+### H.264 motion compensation (`src/kernels/h264_mc.rs`)
+
+Four adapters cover the settled `H264McKernels` table: raw six-tap luma,
+batched chroma, single-list weighting, and bi-prediction weighting. Their
+cases cross all locally supported tiers; chroma includes every one of the 64
+eighth-pel positions and non-multiple-of-four batch tails; weighting crosses
+2/4/8/16-pixel blocks, explicit parameters, the neutral average, saturation,
+and the deliberately scalar wide-intermediate fallback. `fir_mc` separately
+checks both shipped tap sets at every vector-width tail.
 
 ### The wired-in example (`src/kernels/scale_affine.rs`)
 

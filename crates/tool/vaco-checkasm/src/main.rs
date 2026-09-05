@@ -26,6 +26,9 @@ use vaco_checkasm::bench::{
 use vaco_checkasm::kernels::blockdsp::AddPixelsClampedKernel;
 use vaco_checkasm::kernels::fir_mc::FirMcKernel;
 use vaco_checkasm::kernels::fmtconvert::{Int16ToFloatKernel, Int32ToFloatKernel};
+use vaco_checkasm::kernels::h264_mc::{
+    H264BiWeightKernel, H264ChromaKernel, H264LumaKernel, H264UniWeightKernel,
+};
 use vaco_checkasm::kernels::intrapred::DcPredictKernel;
 use vaco_checkasm::kernels::lpc::AutocorrelateKernel;
 use vaco_checkasm::kernels::masked_select::MaskedSelectKernel;
@@ -119,6 +122,26 @@ const ENTRIES: &[Entry] = &[
         name: FirMcKernel::NAME,
         verify: verify_report::<FirMcKernel>,
         bench: bench_kernel::<FirMcKernel>,
+    },
+    Entry {
+        name: H264LumaKernel::NAME,
+        verify: verify_report::<H264LumaKernel>,
+        bench: bench_kernel::<H264LumaKernel>,
+    },
+    Entry {
+        name: H264ChromaKernel::NAME,
+        verify: verify_report::<H264ChromaKernel>,
+        bench: bench_kernel::<H264ChromaKernel>,
+    },
+    Entry {
+        name: H264UniWeightKernel::NAME,
+        verify: verify_report::<H264UniWeightKernel>,
+        bench: bench_kernel::<H264UniWeightKernel>,
+    },
+    Entry {
+        name: H264BiWeightKernel::NAME,
+        verify: verify_report::<H264BiWeightKernel>,
+        bench: bench_kernel::<H264BiWeightKernel>,
     },
     Entry {
         name: SadKernel::NAME,
