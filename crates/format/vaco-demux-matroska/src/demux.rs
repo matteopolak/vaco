@@ -1686,13 +1686,17 @@ impl MatroskaDemuxer {
         // everything downstream reads the tick count.
         if let Some(ns) = default_duration_ns {
             let ticks = self.ns_to_ticks(i64::try_from(ns).unwrap_or(i64::MAX));
-            return Duration::from_micros(ticks_to_micros(ticks, self.timestamp_scale));
+            return time_base_for(self.timestamp_scale)
+                .and_then(|time_base| Duration::from_ticks(ticks, time_base))
+                .unwrap_or(Duration::ZERO);
         }
         if let Some(ticks) = block_duration {
             let ticks = i64::try_from(ticks).unwrap_or(i64::MAX);
             let count = i64::try_from(count.max(1)).unwrap_or(1);
             let per = ticks.checked_div(count).unwrap_or(0);
-            return Duration::from_micros(ticks_to_micros(per, self.timestamp_scale));
+            return time_base_for(self.timestamp_scale)
+                .and_then(|time_base| Duration::from_ticks(per, time_base))
+                .unwrap_or(Duration::ZERO);
         }
         Duration::ZERO
     }
@@ -1876,23 +1880,7 @@ fn duration_from_ticks(ticks: f64, scale_ns: u64) -> Option<Duration> {
     if rounded > 9.0e18 {
         return None;
     }
-    let micros = rescale_rnd(
-        rounded as i64,
-        i64::try_from(scale_ns).ok()?,
-        1000,
-        Rounding::NearestAwayFromZero,
-    )?;
-    Some(Duration::from_micros(micros))
-}
-
-fn ticks_to_micros(ticks: i64, scale_ns: u64) -> i64 {
-    rescale_rnd(
-        ticks,
-        i64::try_from(scale_ns).unwrap_or(1_000_000),
-        1000,
-        Rounding::NearestAwayFromZero,
-    )
-    .unwrap_or(0)
+    Duration::from_ticks(rounded as i64, time_base_for(scale_ns)?)
 }
 
 /// What the enclosing element says about a block that the block itself cannot.

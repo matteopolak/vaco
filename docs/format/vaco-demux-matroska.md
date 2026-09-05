@@ -63,6 +63,10 @@ many packets.
 segment: every track shares it. A file with `TimestampScale = 100` gets
 `1/10000000`, and `tests/demux.rs` pins that against `ffprobe`, because it is
 the case an implementation that assumed milliseconds gets silently wrong.
+Once a `DefaultDuration` or `BlockDuration` has been quantised to that clock,
+the resulting tick count remains its rational duration; it is not converted
+through microseconds a second time. The one-nanosecond-clock regression keeps
+`26,122,448` ticks as `1632653/62500000` seconds.
 
 ### Unknown sizes, and why the schema table exists
 

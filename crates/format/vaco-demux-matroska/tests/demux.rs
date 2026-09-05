@@ -12,7 +12,7 @@
     reason = "test code"
 )]
 
-use vaco_core::{Error, MediaType};
+use vaco_core::{Error, MediaType, Rational};
 use vaco_demux_matroska::ebml::schema as el;
 use vaco_demux_matroska::synth::{self, SegmentSize};
 use vaco_demux_matroska::{MatroskaDemuxer, probe};
@@ -126,6 +126,39 @@ fn a_hundred_nanosecond_scale_gives_a_hundred_nanosecond_time_base() {
     let packets = drain(&mut d);
     assert_eq!(packets.len(), 1);
     assert_eq!(packets[0].pts.ticks(), Some(10_010_000));
+}
+
+#[test]
+fn default_duration_keeps_a_nanosecond_clock_exact() {
+    let mut audio = synth::float(el::SAMPLINGFREQUENCY, 48_000.0);
+    audio.extend_from_slice(&synth::uint(el::CHANNELS, 2));
+    let mut body = synth::uint(el::TRACKNUMBER, 1);
+    body.extend_from_slice(&synth::uint(el::TRACKUID, 1));
+    body.extend_from_slice(&synth::uint(el::TRACKTYPE, 2));
+    body.extend_from_slice(&synth::string(el::CODECID, "A_PCM/INT/LIT"));
+    body.extend_from_slice(&synth::uint(el::DEFAULTDURATION, 26_122_448));
+    body.extend_from_slice(&synth::element(el::AUDIO, &audio));
+    let track = synth::element(el::TRACKENTRY, &body);
+    let cluster = synth::cluster(
+        0,
+        &[simple_block(1, 0, 0x80, &[0u8; 8])],
+        SegmentSize::Known,
+    );
+    let mut demux = open(synth::file(
+        "matroska",
+        &info(1),
+        &track,
+        &[cluster],
+        SegmentSize::Known,
+    ))
+    .unwrap();
+
+    assert_eq!(
+        demux.streams()[0].time_base,
+        Rational::new(1, 1_000_000_000)
+    );
+    let packet = demux.read_packet().unwrap();
+    assert_eq!(packet.duration.as_ratio(), (1_632_653, 62_500_000));
 }
 
 #[test]
