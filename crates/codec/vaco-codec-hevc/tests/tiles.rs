@@ -2,7 +2,7 @@
 //!
 //! The fixture is one 512x64 IDR picture with two uniform tile columns. Its
 //! PPS must carry `tiles_enabled_flag = 1`; the decoder must then refuse the
-//! picture by the named scope error before reading tile-partitioned CABAC.
+//! picture by the named scope error before tile-partitioned reconstruction.
 //! The 1,813-byte HM 18.0 stream has SHA-256
 //! `e7ede7ded9e07974097809c4bacda3492a6634a216a8d8b5c8920a3ceb3c91f2`.
 //! A black-box `ffmpeg` decode is 49,152 visible yuv420p bytes with MD5
@@ -166,6 +166,31 @@ fn malformed_later_tile_cabac_initializer_is_refused() {
 }
 
 #[test]
+fn inferred_first_ctb_split_flag_is_refused() {
+    let tiles = Tiles {
+        num_columns: 1,
+        num_rows: 1,
+        uniform_spacing: true,
+        column_widths: Vec::new(),
+        row_heights: Vec::new(),
+        loop_filter_across_tiles: false,
+    };
+    let layout = TileLayout::from_pps(&tiles, 1, 1).expect("one tile is valid");
+    let mut state = layout
+        .initialize_tile_cabac_states(&[0, 0], &[], 22)
+        .expect("the two-byte arithmetic initializer is valid")
+        .pop()
+        .expect("one tile state exists");
+    let error = state
+        .decode_first_ctb_split_flag(3, 3, true)
+        .expect_err("the split flag is inferred at the minimum coding-block size");
+    assert!(matches!(
+        error,
+        Error::Unsupported("vaco-codec-hevc: first tile CTB split flag is inferred")
+    ));
+}
+
+#[test]
 fn real_tile_slice_header_has_one_tile_entry_point_offset() {
     let limits = Limits::default();
     let mut parser = HevcParser::new(limits.clone());
@@ -221,7 +246,7 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
     }
     let slice_qp = i8::try_from(26 + pps.init_qp_minus26 + header.qp_delta)
         .expect("fixture slice QP fits the signed context API");
-    let tile_states = layout
+    let mut tile_states = layout
         .initialize_tile_cabac_states(slice_data, &header.entry_point_offsets, slice_qp)
         .expect("each tile syntax context bank initializes");
     assert_eq!(tile_states.len(), 2);
@@ -233,6 +258,18 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
             ContextModel::init_hevc(139, slice_qp)
         );
     }
+    let ctb_log2_size = u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size);
+    let first_split = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_split_flag(ctb_log2_size, u32::from(sps.log2_min_cb_size), true)
+        .expect("first tile CTB carries an explicit split flag");
+    let second_split = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_split_flag(ctb_log2_size, u32::from(sps.log2_min_cb_size), true)
+        .expect("second tile CTB carries an explicit split flag");
+    assert_eq!((first_split, second_split), (true, true));
     let cabac = layout
         .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
         .expect("first tile CABAC state initializes");

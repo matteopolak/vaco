@@ -57,6 +57,43 @@ impl TileCabacState<'_> {
     pub const fn first_split_cu_context(&self) -> ContextModel {
         self.contexts.split_cu_flag[0]
     }
+
+    /// Decode the first CTB's explicit `split_cu_flag`.
+    ///
+    /// At a tile's first full-size CTB, both spatial neighbours are
+    /// unavailable, so §7.3.8.4 selects context index 0. This consumes exactly
+    /// that one decision bin and leaves all later CTB syntax untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::InvalidData`] when the supplied geometry is
+    /// inconsistent, and [`vaco_core::Error::Unsupported`] when the flag is
+    /// inferred rather than explicitly coded.
+    pub fn decode_first_ctb_split_flag(
+        &mut self,
+        ctb_log2_size: u32,
+        min_cb_log2_size: u32,
+        ctb_in_bounds: bool,
+    ) -> Result<bool> {
+        if ctb_log2_size < min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile CTB dimensions are invalid",
+            ));
+        }
+        if !ctb_in_bounds || ctb_log2_size == min_cb_log2_size {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile CTB split flag is inferred",
+            ));
+        }
+        let context = self
+            .contexts
+            .split_cu_flag
+            .first_mut()
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: split_cu_flag context is missing",
+            ))?;
+        Ok(self.cabac.decode_decision(context) != 0)
+    }
 }
 
 impl TileLayout {
