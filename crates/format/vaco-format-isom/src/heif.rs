@@ -53,6 +53,9 @@ pub struct ItemInfo {
 impl ItemInfo {
     fn parse(infe: &IsoBox<'_>) -> Option<Self> {
         let full = infe.full().ok()?;
+        if full.version > 3 {
+            return None;
+        }
         let mut r = full.reader();
         let item_id = if full.version >= 3 {
             r.be32()
@@ -492,6 +495,18 @@ mod tests {
         assert_eq!(info.item_type, FourCc::new(b"av01"));
         assert_eq!(info.name, "Color");
         assert!(!info.hidden);
+    }
+
+    #[test]
+    fn infe_rejects_an_unknown_version() {
+        let body = [
+            0, 0, 0, 1, // item_id (the version 3 layout)
+            0, 0, // item_protection_index
+            b'a', b'v', b'0', b'1', // item_type
+            0,    // item_name
+        ];
+        let raw = fullbx(b"infe", 4, 0, &body);
+        assert!(ItemInfo::parse(&first_box(&raw)).is_none());
     }
 
     /// `iloc` bytes from the same file: version 0, one item, one extent

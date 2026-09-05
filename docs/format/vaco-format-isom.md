@@ -786,9 +786,10 @@ Named so the demuxer's author knows what is not here:
   resulting edges are integral, while zero denominators, fractional edges and
   out-of-bounds apertures are refused. `iloc` accepts only its defined `0`,
   `4`, and `8` byte field widths and versions `0` through `2`; `ipma` accepts
-  only its version `0`/`1` item-ID layouts. An unsupported width or version
-  refuses the entire location/property table before it can invent a
-  zero-length extent or apply the wrong layout. Still box-layer
+  only its version `0`/`1` item-ID layouts, and `infe` only versions `0`
+  through `3`. An unsupported width or version refuses the entire
+  location/property/item table before it can invent a zero-length extent or
+  apply the wrong layout. Still box-layer
   only here: `iovl`/`iden`
   derived items, `auxl`/`thmb` reference semantics, and `irot`/`imir`
   transformative properties.
