@@ -68,6 +68,13 @@ the resulting tick count remains its rational duration; it is not converted
 through microseconds a second time. The one-nanosecond-clock regression keeps
 `26,122,448` ticks as `1632653/62500000` seconds.
 
+`Info/Duration` is different: RFC 9559 stores it as a floating-point count of
+timestamp-scale units, so it may legitimately include a fractional tick. The
+demuxer converts the float's shortest round-trippable decimal spelling directly
+to a rational duration after applying `TimestampScale`; it never rounds it to
+an integer tick. This preserves both the measured `12345.6789`-tick payload and
+scientific-notation sub-tick values without a microsecond intermediate.
+
 ### Unknown sizes, and why the schema table exists
 
 RFC 8794 §6.2: an unknown-size element ends at the first element that is *not*

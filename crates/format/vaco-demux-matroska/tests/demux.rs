@@ -129,6 +129,48 @@ fn a_hundred_nanosecond_scale_gives_a_hundred_nanosecond_time_base() {
 }
 
 #[test]
+fn info_duration_preserves_fractional_ticks_at_an_awkward_scale() {
+    // RFC 9559 §5.1.2.10 permits a floating-point Duration in timestamp-scale
+    // units. This is the IEEE-754 payload measured by K2, but a non-default
+    // scale makes an accidental whole-tick conversion impossible to hide.
+    let scale = 1_001_u64;
+    let mut segment_info = info(scale);
+    segment_info.extend_from_slice(&synth::float(el::DURATION, 12_345.678_9));
+    let bytes = synth::file(
+        "matroska",
+        &segment_info,
+        &synth::video_track(1, "V_VP8", 160, 120),
+        &[],
+        SegmentSize::Known,
+    );
+
+    let demux = open(bytes).unwrap();
+    assert_eq!(
+        demux.duration().map(vaco_core::Duration::as_ratio),
+        Some((123_580_245_789, 10_000_000_000_000))
+    );
+}
+
+#[test]
+fn info_duration_keeps_a_scientific_subtick_value() {
+    let mut segment_info = info(1_000_000_000);
+    segment_info.extend_from_slice(&synth::float(el::DURATION, 1e-7));
+    let bytes = synth::file(
+        "matroska",
+        &segment_info,
+        &synth::video_track(1, "V_VP8", 160, 120),
+        &[],
+        SegmentSize::Known,
+    );
+
+    let demux = open(bytes).unwrap();
+    assert_eq!(
+        demux.duration().map(vaco_core::Duration::as_ratio),
+        Some((1, 10_000_000))
+    );
+}
+
+#[test]
 fn default_duration_keeps_a_nanosecond_clock_exact() {
     let mut audio = synth::float(el::SAMPLINGFREQUENCY, 48_000.0);
     audio.extend_from_slice(&synth::uint(el::CHANNELS, 2));

@@ -1875,12 +1875,46 @@ fn duration_from_ticks(ticks: f64, scale_ns: u64) -> Option<Duration> {
     if !ticks.is_finite() || ticks < 0.0 {
         return None;
     }
-    // DD3: convert once, deterministically, half away from zero.
-    let rounded = ticks.round();
-    if rounded > 9.0e18 {
+    let text = finite_decimal(ticks)?;
+    let (numerator, denominator) = Duration::from_decimal_seconds(&text)?.as_ratio();
+    Duration::from_fraction(
+        numerator.checked_mul(i128::from(scale_ns))?,
+        denominator.checked_mul(i128::from(NS))?,
+    )
+}
+
+/// Expand the shortest round-trippable spelling of an IEEE-754 value when it
+/// uses scientific notation, which the decimal duration parser intentionally
+/// does not accept.
+fn finite_decimal(value: f64) -> Option<String> {
+    let text = value.to_string();
+    let Some((coefficient, exponent)) = text.split_once(['e', 'E']) else {
+        return Some(text);
+    };
+    let exponent = exponent.parse::<i32>().ok()?;
+    let (whole, fraction) = coefficient.split_once('.').unwrap_or((coefficient, ""));
+    let digits = [whole, fraction].concat();
+    let position = i32::try_from(whole.len()).ok()?.checked_add(exponent)?;
+    let max_digits = 38_i32;
+    if position.unsigned_abs() > u32::try_from(max_digits).ok()?
+        || i32::try_from(digits.len())
+            .ok()?
+            .checked_sub(position)?
+            .unsigned_abs()
+            > u32::try_from(max_digits).ok()?
+    {
         return None;
     }
-    Duration::from_ticks(rounded as i64, time_base_for(scale_ns)?)
+    if position <= 0 {
+        let zeroes = usize::try_from(position.checked_neg()?).ok()?;
+        Some(format!("0.{}{}", "0".repeat(zeroes), digits))
+    } else if usize::try_from(position).ok()? >= digits.len() {
+        let zeroes = usize::try_from(position).ok()?.checked_sub(digits.len())?;
+        Some(format!("{}{}", digits, "0".repeat(zeroes)))
+    } else {
+        let at = usize::try_from(position).ok()?;
+        Some(format!("{}.{}", digits.get(..at)?, digits.get(at..)?))
+    }
 }
 
 /// What the enclosing element says about a block that the block itself cannot.
