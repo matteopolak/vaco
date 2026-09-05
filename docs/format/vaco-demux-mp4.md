@@ -837,7 +837,10 @@ crate decides what becomes a stream:
 * **Every `grid` item becomes a `TileGrid` stream group**, not a stream:
   `dimg` names the tiles in raster order, the descriptor (read from `idat`
   for `construction_method 1`, from the file for 0) gives rows, columns
-  and output size; the grid's single `ispe` must agree with that output, and the
+  and output size; the descriptor version must be `0` and its only permitted
+  flag is `large_field` (`0x01`), while the grid's single `ispe` must be
+  version `0` with no flags and agree with that output. Unknown descriptor
+  fields refuse the group rather than guessing their layout. The
   tiles' `ispe` gives the canvas (`coded_*`) and per-tile offsets. A grid whose
   tile count is not `rows × columns`, whose tiles are not streams or do not
   share one `ispe` size, whose `ispe` disagrees with its descriptor, or whose

@@ -400,6 +400,9 @@ pub fn parse_iref(iref: &IsoBox<'_>) -> Vec<ItemReference> {
 #[must_use]
 pub fn parse_ispe(ispe: &IsoBox<'_>) -> Option<(u32, u32)> {
     let full = ispe.full().ok()?;
+    if full.version != 0 || full.flags != 0 {
+        return None;
+    }
     let mut r = full.reader();
     let width = r.be32();
     let height = r.be32();
@@ -510,8 +513,11 @@ impl ImageGrid {
     #[must_use]
     pub fn parse(data: &[u8]) -> Option<Self> {
         let mut r = vaco_bitstream::ByteReader::new(data);
-        let _version = r.u8();
+        let version = r.u8();
         let flags = r.u8();
+        if version != 0 || flags & !1 != 0 {
+            return None;
+        }
         let rows = u32::from(r.u8()).saturating_add(1);
         let columns = u32::from(r.u8()).saturating_add(1);
         let large = flags & 1 != 0;
@@ -715,6 +721,15 @@ mod tests {
     }
 
     #[test]
+    fn ispe_refuses_unknown_version_or_reserved_flags() {
+        let body = [0, 0, 0, 0x40, 0, 0, 0, 0x30];
+        for (version, flags) in [(1, 0), (0, 1)] {
+            let raw = fullbx(b"ispe", version, flags, &body);
+            assert_eq!(parse_ispe(&first_box(&raw)), None);
+        }
+    }
+
+    #[test]
     fn clap_resolves_exact_integer_edges() {
         let values = [26u32, 1, 6, 1, 1, 1, 0, 1];
         let body = values
@@ -903,6 +918,13 @@ mod tests {
         assert_eq!(grid.rows, 1);
         assert_eq!(grid.columns, 2);
         assert_eq!((grid.output_width, grid.output_height), (128, 64));
+    }
+
+    #[test]
+    fn image_grid_refuses_unknown_version_or_reserved_flags() {
+        for data in [[1, 0, 0, 1, 0, 128, 0, 64], [0, 2, 0, 1, 0, 128, 0, 64]] {
+            assert!(ImageGrid::parse(&data).is_none());
+        }
     }
 
     #[test]

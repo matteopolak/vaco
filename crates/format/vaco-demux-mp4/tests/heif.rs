@@ -363,6 +363,37 @@ fn duplicate_grid_dimg_records_refuse_the_ambiguous_group() {
 }
 
 #[test]
+fn a_grid_with_unknown_descriptor_bits_is_refused() {
+    for byte in [1u8, 2] {
+        let mut bytes = heif();
+        let idat = bytes.windows(4).position(|w| w == b"idat").unwrap();
+        bytes[idat + 4] = byte;
+        let demux = open(bytes);
+        assert_eq!(demux.streams().len(), 3);
+        assert!(demux.stream_groups().is_empty());
+    }
+}
+
+#[test]
+fn a_grid_with_an_unknown_ispe_version_or_flags_is_refused() {
+    for (relative_offset, byte) in [(4, 1u8), (7, 1)] {
+        let mut bytes = heif();
+        // `ispe` is a FullBox. The grid's is its second occurrence, and its
+        // version byte follows the four-character code.
+        let grid_ispe = bytes
+            .windows(4)
+            .enumerate()
+            .filter_map(|(offset, kind)| (kind == b"ispe").then_some(offset))
+            .nth(1)
+            .unwrap();
+        bytes[grid_ispe + relative_offset] = byte;
+        let demux = open(bytes);
+        assert_eq!(demux.streams().len(), 3);
+        assert!(demux.stream_groups().is_empty());
+    }
+}
+
+#[test]
 fn duplicate_item_info_ids_refuse_the_item_file() {
     let mut bytes = heif();
     let fourth_infe = bytes
