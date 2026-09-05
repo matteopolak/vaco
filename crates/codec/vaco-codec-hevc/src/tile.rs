@@ -6,6 +6,7 @@
 //! still refuses tile pictures before CABAC reconstruction or filtering, so a
 //! caller cannot accidentally turn this geometry into cross-tile pixels.
 
+use vaco_codec_cabac::CabacDecoder;
 use vaco_core::{Error, Result};
 use vaco_parse_hevc::pps::Tiles;
 
@@ -176,6 +177,33 @@ impl TileLayout {
         data.get(start..end).ok_or(Error::InvalidData(
             "vaco-codec-hevc: tile substream range is invalid",
         ))
+    }
+
+    /// Initialize CABAC state for the first tile substream.
+    ///
+    /// The input starts immediately after the aligned slice header, so
+    /// [`CabacDecoder::new`] applies §9.3.1.2's arithmetic-state
+    /// initialization to the tile-local range. This consumes only the
+    /// initializer's mandatory nine bits; no CTB syntax bins are consumed
+    /// until a tile reconstruction path is proven.
+    ///
+    /// # Errors
+    ///
+    /// Propagates tile range validation and rejects an empty or malformed
+    /// first substream before returning a decoder.
+    pub fn initialize_first_tile_cabac<'a>(
+        &self,
+        data: &'a [u8],
+        entry_point_offsets: &[u32],
+    ) -> Result<CabacDecoder<'a>> {
+        let first = self.first_tile_substream(data, entry_point_offsets)?;
+        let decoder = CabacDecoder::new(first);
+        if decoder.malformed() {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile CABAC initialization is malformed",
+            ));
+        }
+        Ok(decoder)
     }
 
     /// Return `(tile_id, tile-local raster CTB address)` for a CTB.

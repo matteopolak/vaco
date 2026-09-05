@@ -17,7 +17,6 @@
 )]
 
 use vaco_bitstream::BitReader;
-use vaco_codec_cabac::CabacDecoder;
 use vaco_codec_core::Decoder;
 use vaco_codec_hevc::{HevcDecoder, TileLayout};
 use vaco_core::Error;
@@ -126,6 +125,26 @@ fn nonuniform_tile_widths_and_heights_leave_edges_unavailable() {
 }
 
 #[test]
+fn malformed_first_tile_cabac_initializer_is_refused() {
+    let tiles = Tiles {
+        num_columns: 1,
+        num_rows: 1,
+        uniform_spacing: true,
+        column_widths: Vec::new(),
+        row_heights: Vec::new(),
+        loop_filter_across_tiles: false,
+    };
+    let layout = TileLayout::from_pps(&tiles, 1, 1).expect("one tile is valid");
+    let error = layout
+        .initialize_first_tile_cabac(&[0], &[])
+        .expect_err("a one-byte CABAC initializer overruns the nine-bit offset");
+    assert!(matches!(
+        error,
+        Error::InvalidData("vaco-codec-hevc: first tile CABAC initialization is malformed")
+    ));
+}
+
+#[test]
 fn real_tile_slice_header_has_one_tile_entry_point_offset() {
     let limits = Limits::default();
     let mut parser = HevcParser::new(limits.clone());
@@ -171,10 +190,9 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
             (header.entry_point_offsets[0] as usize, slice_data.len())
         ]
     );
-    let first_tile_data = layout
-        .first_tile_substream(slice_data, &header.entry_point_offsets)
-        .expect("first tile substream is non-empty");
-    let cabac = CabacDecoder::new(first_tile_data);
+    let cabac = layout
+        .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
+        .expect("first tile CABAC state initializes");
     assert_eq!(cabac.range(), 510);
     assert!(!cabac.malformed());
 }
