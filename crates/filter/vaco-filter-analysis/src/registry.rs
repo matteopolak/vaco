@@ -50,6 +50,7 @@ const KNOWN_OPTIONS: &[(&str, &[&str])] = &[
     ("scdet", &["threshold", "t", "sc_pass", "s"]),
     ("showinfo", &["checksum", "udu_sei_as_ascii"]),
     ("signalstats", &["stat", "out", "c", "color"]),
+    ("siti", &["print_summary"]),
     ("ssim", &["stats_file", "f"]),
     ("vmafmotion", &["stats_file", "f"]),
 ];
@@ -95,6 +96,7 @@ const NAMES: &[&str] = &[
     "scdet",
     "showinfo",
     "signalstats",
+    "siti",
     "ssim",
     "vmafmotion",
 ];
@@ -125,6 +127,7 @@ impl FilterRegistry for AnalysisRegistry {
             "scdet" => crate::scdet::create(req),
             "showinfo" => crate::showinfo::create(req),
             "signalstats" => crate::signalstats::create(req),
+            "siti" => crate::siti::create(req),
             "ssim" => crate::ssim::create(req),
             "vmafmotion" => crate::vmafmotion::create(req),
             other => return Err(format!("vaco-filter-analysis: no filter named `{other}`")),

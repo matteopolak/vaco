@@ -88,6 +88,13 @@ media = "video"
 
 [[component]]
 kind = "filter"
+name = "siti"
+long_name = "Calculate spatial information and temporal information."
+ctor = "vaco_filter_analysis::siti::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
 name = "ssim"
 long_name = "Calculate the SSIM between two video streams."
 ctor = "vaco_filter_analysis::ssim::DESC"

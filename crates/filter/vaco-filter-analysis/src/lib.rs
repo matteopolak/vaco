@@ -3,11 +3,11 @@
 //! (`blackdetect`, `blackframe`, `bbox`, `cropdetect`, `scdet`), and
 //! diagnostics (`entropy`, `showinfo`).
 //!
-//! `bitplanenoise`, `siti`, `vif`, `ssim360`, `signature`,
+//! `bitplanenoise`, `vif`, `ssim360`, `signature`,
 //! `xpsnr`, `blockdetect`, `readeia608`, `readvitc`, `photosensitivity` and
 //! `codecview` are not implemented — see `docs/filter/vaco-filter-analysis.md`
-//! for why, including two filters (`bitplanenoise`, `siti`) that looked like
-//! clean closed forms and measured out not to be.
+//! for why, including `bitplanenoise`, which looked like a clean closed form
+//! and measured out not to be.
 //!
 //! # Shape
 //!
@@ -53,6 +53,7 @@ pub mod registry;
 pub mod scdet;
 pub mod showinfo;
 pub mod signalstats;
+pub mod siti;
 pub mod ssim;
 mod video;
 pub mod vmafmotion;

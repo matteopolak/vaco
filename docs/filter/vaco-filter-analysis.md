@@ -7,11 +7,17 @@ They are the reachable part of `planning/16-filters.md` §4.2's video metrics
 row (checked against the plan directly rather than the earlier, wrongly-cited
 §4.3).
 
+**2026-09-05 continuation pass**: added `siti`'s measured legacy P.910
+compatibility path for 8-bit planar luma. It follows the reference's clamped
+integer range expansion and deliberately does not pretend to implement the
+newer HDR-aware P.910 pipeline that the reference does not expose.
+
 **2026-08-23 continuation pass**: added `entropy` and `cropdetect` (this
 wave's own two best-value picks), extended `signalstats` from 15 to 25 of
 its 28 documented keys (`SAT*`, `HUE*`, `*DIF`, `*BITDEPTH`), closed
 `blackframe`'s documented exact-threshold boundary gap, and investigated —
-without shipping — `bitplanenoise` and `siti`, both of which looked like
+without shipping — `bitplanenoise` and an earlier, under-specified `siti`
+attempt, both of which looked like
 clean closed forms and measured out to not be. See "What landed" and the
 per-filter sections below for the specifics.
 
@@ -28,7 +34,7 @@ both directions — nothing to add, nothing to drop.
 
 ## What landed, and why the other eleven did not
 
-**Landed** (thirteen): `psnr`, `ssim`, `identity`, `msad`, `vmafmotion`,
+**Landed** (fourteen): `psnr`, `ssim`, `identity`, `msad`, `vmafmotion`, `siti`,
 `signalstats`, `blackdetect`, `blackframe`, `bbox`, `entropy`, `cropdetect`,
 `showinfo`, `scdet`.
 
@@ -64,11 +70,11 @@ other filters are verified against was judged worse than leaving it out.
   tunable ranges; a scene-cut heuristic combining mean-absolute-frame-
   difference with its own frame-to-frame delta; a rolling-window temporal
   luminance-flash detector) that this pass did not have time to pin down
-  precisely enough to trust, given what `bitplanenoise` and `siti` (next)
-  cost to *not* trust on an optimistic first read.
-* `bitplanenoise`, `siti` — investigated at length in the 2026-08-23
-  continuation pass and **not shipped as a guess**, which is the point of
-  recording them here rather than folding them into the bullet above:
+  precisely enough to trust after earlier optimistic formula probes proved
+  insufficient.
+* `bitplanenoise` — investigated at length in the 2026-08-23 continuation
+  pass and **not shipped as a guess**, which is the point of recording it here
+  rather than folding it into the bullet above:
   - `bitplanenoise`'s noise ratio, on a fixture engineered to be maximally
     noisy (alternating rows, guaranteeing every adjacent-row bit differs),
     holds its **numerator constant at exactly `4`** while its denominator
@@ -80,27 +86,6 @@ other filters are verified against was judged worse than leaving it out.
     reproduced "numerator pinned to 4, independent of height, dependent
     only on width" — measured, not guessed, and left rather than shipped
     on a formula that could not explain its own calibration fixture.
-  - `siti`'s `SI` (the ITU-T P.910 Sobel-gradient-magnitude standard
-    deviation) matched the textbook formula **exactly** on a
-    maximum-contrast fixture: a 16x16 frame split `0`/`255` down the middle,
-    interior-pixels-only, population (not sample) standard deviation, gives
-    `356.925648...`, and the reference prints `356.93` — a match to every
-    digit `%.2f` can show. The *same* formula on the *same* spatial pattern
-    at `100`/`120` (a linear rescale of the same step) predicts `27.99`
-    (`356.93 * 20/255`); the reference measures `33.59`. Because Sobel and
-    population variance are both linear/quadratic in the input, a genuine
-    amplitude-independent formula **cannot** match at one amplitude and
-    miss by ~20% at another — this rules out "the constant is slightly
-    off" and points at something amplitude-dependent (a gamma step, a
-    quantised intermediate, or a formula this pass has not found) that a
-    single flat-field probe cannot see. `TI` was not independently pinned
-    down either, for the same reason: the one two-frame test constructed
-    to isolate it also disagreed with a linear std-of-difference model
-    (predicted `10.0`, measured `12.00` then `11.50` — not even self-
-    consistent between two structurally-identical steps).
-  Both are documented here in the spirit of `ssim`'s own "not byte-exact,
-  and here is the exact arithmetic that proves it" entry below, not
-  scope-cut for time.
 * `xpsnr` — re-measured in this pass (`ffmpeg -h filter=xpsnr`) as a
   correction worth recording even though it changes nothing shipped:
   **`xpsnr` *does* carry the full `framesync` option surface**
@@ -133,6 +118,36 @@ metadata key, precision, and state behavior.
 filter graph has no filter-owned file-output channel. Per-frame metadata is
 the reachable output channel; adding side-effecting file I/O here would be an
 architectural change, not a metric implementation detail.
+
+### `siti` — legacy P.910 spatial and temporal information
+
+`siti` supports `gray8`, `yuv420p`, `yuv422p`, and `yuv444p`, measuring only
+their 8-bit luma plane. It writes `lavfi.siti.si` and `lavfi.siti.ti` with two
+fractional digits, retaining the previous normalised luma frame for TI and
+resetting that state on flush. The first TI is `0.00`.
+
+`print_summary` is accepted because the reference advertises it, but it only
+writes an end-of-stream console summary. This filter graph has no filter-owned
+log/output channel, so per-frame metadata is the complete reachable result.
+
+The reference compatibility path is deliberately narrow. It expands full-range
+samples unchanged; limited and unspecified samples use the measured integer
+rule `clamp(((code - 16) * 255) / 219, 0, 255)`, truncating before Sobel or
+frame differencing. A 16x16 vertical `100`/`120` step therefore reports `27.99`
+at full range and `33.59` at limited or unspecified range. `0 -> half-right-100
+-> half-right-30` at full range reports `(SI, TI)` of `(0.00, 0.00)`,
+`(139.97, 50.00)`, then `(41.99, 35.00)`.
+
+ITU-T P.910 (07/2022 and newer) specifies a different HDR-aware calculation:
+range normalisation, an SDR EOTF (BT.1886 or inverse-sRGB), then a PQ OETF
+before SI/TI. The MIT-licensed VQEG `siti-tools` reference follows that newer
+pipeline. Direct `ffprobe` probes show this filter's existing reference does
+not: `bt709`, `iec61966-2-1`, `linear`, and `smpte2084` transfer tags all give
+the same value for a fixed full/limited-range fixture. Because `siti` exposes
+no option selecting BT.1886 versus inverse-sRGB, this component matches the
+observable legacy filter rather than guessing a policy the reference cannot
+express. A future HDR-aware metric needs its own explicit configuration and
+VQEG-vector acceptance tests.
 
 ## The interface this crate depends on: `Frame::metadata()` (gap 11)
 
