@@ -109,6 +109,20 @@ module doc. Three documented gaps:
 3. `aspect != 1` reproduces every interior pixel exactly but not the
    reference's extra hard clipping right at the frame's extreme corners.
 
+#### Performance note
+
+For the frame-stable `dither=0`/`eval=init` path, the luma falloff factors are
+cached by frame dimensions and reused for later frames. This removes repeated
+`hypot`/`cos`/`powi` work while leaving the per-frame evaluation path unchanged.
+On this machine (Apple silicon, 2026-09-05), ten rotated 300-frame rounds on a
+640x360 `testsrc2` YUV420p Y4M fixture measured Vaco's median at 0.2340 s wall
+and 0.2315 s CPU, versus 0.4275 s and 0.4237 s before (0.547x and 0.546x).
+The same-session ffmpeg ratio moved from 4.40x to 2.41x wall and 3.37x to
+1.84x CPU. Named `Cycles` from bounded xctrace CPU Counters fell from
+3,375,605 to 2,364,360 (0.700x). Outputs were byte-identical before/after and
+deterministic at `-threads 1`, `2`, `4`, and `8`; ffmpeg's luma matched exactly
+and its chroma differed only by the already documented scattered ±1 residual.
+
 ### `noise`
 
 Adds per-component (`c0`..`c3`) pseudo-random noise, `all_seed`/

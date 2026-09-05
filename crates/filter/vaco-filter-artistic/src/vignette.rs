@@ -222,6 +222,13 @@ struct Params {
     angle: f64,
 }
 
+#[derive(Debug)]
+struct FactorCache {
+    width: u32,
+    height: u32,
+    values: Vec<f64>,
+}
+
 fn eval_params(
     angle_expr: &Expr,
     x0_expr: &Expr,
@@ -295,6 +302,7 @@ pub(crate) struct Filter {
     eval: Eval,
     aspect: f64,
     params: Option<Params>,
+    factor_cache: Option<FactorCache>,
 }
 
 impl Filter {
@@ -323,6 +331,7 @@ impl Filter {
             eval,
             aspect: f64::from(aspect_ratio.num) / f64::from(aspect_ratio.den),
             params: None,
+            factor_cache: None,
         })
     }
 
@@ -356,6 +365,29 @@ impl FrameFilter for Filter {
             return Ok(FrameOut::One(input));
         };
         let params = self.params_for(width, height);
+        if self.eval == Eval::Init
+            && !matches!(
+                self.factor_cache.as_ref(),
+                Some(cache) if cache.width == width && cache.height == height
+            )
+        {
+            let mut values = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    values.push(factor_at(
+                        params,
+                        common::to_i32(x as usize),
+                        common::to_i32(y as usize),
+                        self.aspect,
+                    ));
+                }
+            }
+            self.factor_cache = Some(FactorCache {
+                width,
+                height,
+                values,
+            });
+        }
         let is_rgb = format.is_rgb();
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         for p in 0..format.plane_count() {
@@ -400,7 +432,17 @@ impl FrameFilter for Filter {
                     if xi >= pw {
                         break;
                     }
-                    let factor = factor_at(plane_params, xi, y, self.aspect);
+                    let factor = if p == 0 && self.eval == Eval::Init {
+                        self.factor_cache
+                            .as_ref()
+                            .and_then(|cache| {
+                                let index = uy.checked_mul(width as usize)?.checked_add(x)?;
+                                cache.values.get(index).copied()
+                            })
+                            .unwrap_or_else(|| factor_at(plane_params, xi, y, self.aspect))
+                    } else {
+                        factor_at(plane_params, xi, y, self.aspect)
+                    };
                     let Some(src) = src_row.get(x) else { continue };
                     let Some(dst) = dst_row.get_mut(x) else {
                         continue;
