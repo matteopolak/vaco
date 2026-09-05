@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use vaco_core::MediaType;
-use vaco_core::{Duration, Error, ExactDuration, Rational, Result, Rounding, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, Rational, Result, Timestamp};
 use vaco_format_core::seek::{
     IndexEntry as FcIndexEntry, IndexFlags, PacketIndex, SeekFlags, SeekTarget,
 };
@@ -670,8 +670,7 @@ impl Demuxer for MxfDemuxer {
     }
 
     fn duration(&self) -> Option<Duration> {
-        self.duration_exact?
-            .to_duration(Rounding::NearestAwayFromZero)
+        self.duration_exact
     }
 
     fn duration_exact(&self) -> Option<ExactDuration> {
@@ -833,17 +832,17 @@ mod tests {
         let mut demux = open_fixture(include_bytes!("../tests/fixtures/op1a_ntsc_one_frame.mxf"));
 
         // Black-box reference: ffprobe 9.0.1 reports time_base=1001/30000,
-        // duration_ts=1, duration=0.033367, and nb_read_packets=1. The legacy
-        // view remains rounded to microseconds, while the exact view must
-        // retain the MXF edit unit and edit rate without that conversion.
-        assert_eq!(demux.duration(), Some(Duration::from_micros(33_367)));
+        // duration_ts=1, duration=0.033367, and nb_read_packets=1.
+        assert_eq!(demux.duration().map(Duration::as_ratio), Some((1001, 30_000)));
         assert_eq!(
             demux
                 .duration_exact()
                 .map(vaco_core::ExactDuration::as_ratio),
             Some((1001, 30_000))
         );
-        assert_eq!(demux.read_packet().unwrap().pts, Timestamp::ZERO);
+        let packet = demux.read_packet().unwrap();
+        assert_eq!(packet.pts, Timestamp::ZERO);
+        assert_eq!(packet.len, 2035);
         assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 

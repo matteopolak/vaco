@@ -1,0 +1,10 @@
+[[source]]
+id = "container-duration-oracle"
+kind = "blackbox"
+title = "ffprobe 9.0.1 native-clock packet and stream durations for the committed NTSC MXF and DV reference fixtures"
+acquired = "2026-09-04"
+where = "Installed ffprobe -count_packets -show_entries stream=time_base,duration_ts,nb_read_packets -show_packets -show_entries packet=pts,duration,size -of json"
+
+# op1a_ntsc_one_frame.mxf: one 2035-byte packet, PTS 0, duration 1 at1001/30000.
+# ntsc_sample.dv video: two 120000-byte packets, PTS 0/2002, each duration2002
+# at1/60000; stream duration4004. Audio extraction remains outside DV demux scope.

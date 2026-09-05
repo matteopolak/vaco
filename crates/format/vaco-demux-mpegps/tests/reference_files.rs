@@ -133,9 +133,11 @@ fn a_real_mpeg1_systems_sample_keeps_the_scr_duration_exact() {
     let demux = open(bytes);
 
     // The seven pack headers span 59,374 ticks of MPEG-PS's 90 kHz SCR
-    // clock. That is 659,711 1/9 microseconds, so the legacy view rounds
-    // while the exact view must retain the source clock's fraction.
-    assert_eq!(demux.duration(), Some(Duration::from_micros(659_711)));
+    // clock. Both APIs must retain the source clock's fraction.
+    assert_eq!(
+        demux.duration().map(Duration::as_ratio),
+        Some((29_687, 45_000))
+    );
     assert_eq!(
         demux
             .duration_exact()

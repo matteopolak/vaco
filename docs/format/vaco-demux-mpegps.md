@@ -99,9 +99,8 @@ scans forward from a byte position for the next pack header and reports its
 SCR — a direct analogue of MPEG-TS's PCR-based bisection seek.
 
 The aggregate duration is the observed first-to-last SCR span on that native
-90 kHz clock. `duration_exact()` retains the tick ratio without an intermediate
-microsecond conversion; the legacy `duration()` view is derived from the exact
-value with round-to-nearest for compatibility. The committed MPEG-1 reference
+90 kHz clock. `duration()` and its compatibility alias `duration_exact()` retain
+the same tick ratio without an intermediate microsecond conversion. The committed MPEG-1 reference
 fixture spans 59,374 ticks (`29,687/45,000` seconds), which cannot be represented
 as a whole number of microseconds.
 

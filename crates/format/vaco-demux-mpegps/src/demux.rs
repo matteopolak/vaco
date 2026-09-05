@@ -38,7 +38,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::{CodecId, CodecParameters, Parser};
-use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, Rounding, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::options::FormatOptions;
 use vaco_format_core::seek::{SeekFlags, SeekTarget, binary_search};
@@ -613,8 +613,7 @@ impl Demuxer for MpegPsDemuxer {
     }
 
     fn duration(&self) -> Option<Duration> {
-        self.duration_exact?
-            .to_duration(Rounding::NearestAwayFromZero)
+        self.duration_exact
     }
 
     fn duration_exact(&self) -> Option<ExactDuration> {

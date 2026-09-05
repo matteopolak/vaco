@@ -712,18 +712,16 @@ impl Mp4Demuxer {
     }
 
     fn finish_durations(&mut self) {
-        let mut best: Option<i64> = None;
+        let mut best: Option<Duration> = None;
         for s in &self.streams {
             let Some(dur) = s.duration_ts else { continue };
             let start = s.start_time.ticks().unwrap_or(0);
-            let end = Timestamp::new(start.saturating_add(dur))
-                .to_duration(s.time_base)
-                .map(vaco_core::Duration::as_micros);
+            let end = Timestamp::new(start.saturating_add(dur)).to_duration(s.time_base);
             if let Some(end) = end {
-                best = Some(best.map_or(end, |b: i64| b.max(end)));
+                best = Some(best.map_or(end, |b| b.max(end)));
             }
         }
-        self.duration = best.map(Duration::from_micros);
+        self.duration = best;
         // A cover image has no timeline; the reference gives it the container's
         // duration in its own 1/90000 base.
         let total = self.duration;

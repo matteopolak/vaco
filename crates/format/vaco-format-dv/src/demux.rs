@@ -253,22 +253,10 @@ impl DvDemuxer {
         })
     }
 
-    /// Wall-clock duration of one frame, in microseconds.
-    ///
-    /// Integer division is exactly what this needs, not a rounding
-    /// shortcut to avoid: a frame's duration in whole microseconds is
-    /// definitionally `1_000_000 * den / num`, and switching to floats
-    /// would trade an exact answer for an inexact one.
-    #[allow(
-        clippy::integer_division,
-        reason = "exact tick arithmetic, not an approximation"
-    )]
+    /// Exact wall-clock duration of one frame at the profile's native rate.
     fn frame_duration(&self) -> Duration {
         let rate = self.profile.frame_rate;
-        if rate.num == 0 {
-            return Duration::ZERO;
-        }
-        Duration::from_micros(1_000_000i64 * i64::from(rate.den) / i64::from(rate.num))
+        Duration::from_ticks(1, Rational::new(rate.den, rate.num)).unwrap_or(Duration::ZERO)
     }
 
     /// How many `1/DV_TIME_BASE_DEN` ticks one frame spans: `2002` for NTSC
@@ -377,12 +365,7 @@ impl Demuxer for DvDemuxer {
     }
 
     fn duration(&self) -> Option<Duration> {
-        let n = self.total_frames?;
-        Some(Duration::from_micros(
-            self.frame_duration()
-                .as_micros()
-                .saturating_mul(n.cast_signed()),
-        ))
+        self.duration_exact()
     }
 
     fn duration_exact(&self) -> Option<vaco_core::ExactDuration> {
@@ -460,7 +443,10 @@ mod codec_identity_tests {
             .expect("open NTSC frame");
 
         assert_eq!(demux.streams()[0].frame_count, Some(1));
-        assert_eq!(demux.duration().map(Duration::as_ratio), Some((1001, 30_000)));
+        assert_eq!(
+            demux.duration().map(vaco_core::Duration::as_ratio),
+            Some((1001, 30_000))
+        );
         assert_eq!(
             demux
                 .duration_exact()

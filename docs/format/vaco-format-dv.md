@@ -64,8 +64,9 @@ not shipping one: wrong audio silently looks like working audio.
 
 For a seekable file, the video aggregate duration is derived from the count
 of whole fixed-size frames on DV's native 60,000 Hz clock. The
-`duration_exact()` view preserves NTSC's 2,002 ticks per frame; the legacy
-`duration()` API remains the rounded microsecond value for compatibility.
+`duration()` and `duration_exact()` views both preserve NTSC's 2,002 ticks per
+frame. Packet durations use the same exact frame period, so multiplying frame
+counts never accumulates truncated microseconds.
 
 ### Muxing
 

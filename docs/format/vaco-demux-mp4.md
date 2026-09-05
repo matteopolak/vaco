@@ -118,6 +118,11 @@ is a measurement nobody can re-check.
 
 #### `duration_ts` — three sources, and `mdhd` is not one of them
 
+The container duration is the latest stream end, compared as exact rational
+seconds across track clocks. Keep native ticks through that comparison: a
+microsecond intermediate loses 44.1 kHz audio and NTSC periods even when every
+sample-table count is correct. Display formatting rounds only at the sink.
+
 > `duration_ts = min(non-empty elst total rescaled, min(mdhd.duration, Σ sample durations))`
 
 | File | `mdhd` | Σ `stts` | `elst` → media | `duration_ts` |
