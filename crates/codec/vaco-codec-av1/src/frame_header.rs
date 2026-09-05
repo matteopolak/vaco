@@ -14,15 +14,16 @@
 //! `delta_q_params()`/`delta_lf_params()`, `loop_filter_params()`/
 //! `cdef_params()`/`lr_params()` (CDEF parameters are retained for filtering;
 //! restoration modes are retained for explicit scope checks),
-//! `read_tx_mode()`, `frame_reference_mode()`/`skip_mode_params()`/
-//! `global_motion_params()` (all three are no-op reads for an intra frame,
-//! kept only so the syntax order matches the specification exactly),
+//! `read_tx_mode()` and the bounded inter `frame_reference_mode()` prefix
+//! (which selects a named refusal before block symbols are read), then intra
+//! `skip_mode_params()`/`global_motion_params()` no-op assignments,
 //! `reduced_tx_set` and `film_grain_params()` (parsed in full for bit
 //! alignment; grain synthesis is issue #343).
 //!
 //! An inter frame's header (`FrameIsIntra == 0`) is parsed through its
-//! reference-derived size and frame-level motion flags. The decoder then
-//! returns [`Error::Unsupported`] before block inter prediction is touched.
+//! reference-derived size, frame-level motion flags, and
+//! `frame_reference_mode()`. The decoder then returns [`Error::Unsupported`]
+//! before block inter prediction is touched.
 //!
 //! `Vaco-Spec-Ref: aom-av1-spec §5.9 (frame header OBU syntax)`.
 
@@ -436,7 +437,10 @@ fn parse_inner(
         }
     }
 
-    if !frame_type.is_intra() {
+    let is_intra = frame_type.is_intra();
+    let size = if is_intra {
+        parse_frame_size(r, seq, frame_size_override_flag)?
+    } else {
         let ref_frame_idx = parse_ref_frame_indices(r, seq)?;
         if seq.frame_id_numbers_present_flag {
             let delta_bits = u32::from(seq.delta_frame_id_length);
@@ -457,18 +461,14 @@ fn parse_inner(
         if !error_resilient_mode && seq.enable_ref_frame_mvs {
             let _use_ref_frame_mvs = r.get_bit();
         }
-        let _ = size;
-        return Err(Error::Unsupported(
-            "vaco-codec-av1: inter frame header parsed through frame_size_with_refs; inter prediction is not decoded",
-        ));
-    }
-
-    let size = parse_frame_size(r, seq, frame_size_override_flag)?;
-    let allow_intrabc = if allow_screen_content_tools && size.upscaled_width == size.coded_width {
-        r.get_bit() != 0
-    } else {
-        false
+        size
     };
+    let allow_intrabc =
+        if is_intra && allow_screen_content_tools && size.upscaled_width == size.coded_width {
+            r.get_bit() != 0
+        } else {
+            false
+        };
     if allow_intrabc {
         return Err(Error::Unsupported(
             "vaco-codec-av1: allow_intrabc (intra block copy) is not decoded",
@@ -520,8 +520,18 @@ fn parse_inner(
     } else {
         TxMode::Largest
     };
-    // frame_reference_mode()/skip_mode_params(): both are unconditional
-    // no-op assignments when FrameIsIntra, with no bits read.
+    if !is_intra {
+        let reference_select = r.get_bit() != 0;
+        if reference_select {
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: compound-reference inter block prediction is not decoded",
+            ));
+        }
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: single-reference inter block prediction is not decoded",
+        ));
+    }
+    // skip_mode_params(): a no-op when FrameIsIntra, with no bits read.
     // allow_warped_motion: FrameIsIntra forces 0, no bit read.
     let reduced_tx_set = r.get_bit() != 0;
     // global_motion_params(): FrameIsIntra returns immediately after

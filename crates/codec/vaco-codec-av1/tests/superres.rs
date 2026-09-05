@@ -195,7 +195,7 @@ fn active_superres_reference_frame_is_exact_before_inter_prediction_refusal() {
     assert!(matches!(
         error,
         Error::Unsupported(
-            "vaco-codec-av1: inter frame header parsed through frame_size_with_refs; inter prediction is not decoded"
+            "vaco-codec-av1: single-reference inter block prediction is not decoded"
         )
     ));
 }

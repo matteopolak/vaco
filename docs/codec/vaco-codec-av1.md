@@ -25,7 +25,7 @@ direct decoder callers and tests use the shared symbol engine.
 | `symbol.rs` | Compatibility re-export of `vaco-codec-msac::av1::SymbolDecoder`; the shared crate owns §8.2's range arithmetic and CDF adaptation |
 | `cdf.rs` | `TileCdf` — one fresh copy of every default CDF array (§9.4) this crate's syntax-element set reads, built once per tile; `qctx()`'s base_q_idx bucketing for the four coefficient-table families |
 | `tables.rs` + `tables/{default_cdf,scan,conversion,quant}.rs` | mechanically-extracted spec tables (default CDFs, scan orders, size/context conversion tables, quantizer lookups) |
-| `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — intra frame syntax, including retained CDEF strengths/damping, restoration modes, and loop-filter levels used to refuse restoration that would need unavailable deblocking |
+| `frame_header.rs` | `FrameHeader::parse`/`parse_from_reader` — intra syntax plus the bounded inter header prefix through `frame_reference_mode()`; it retains CDEF/restoration/loop-filter state for scope checks and refuses the selected single- or compound-reference block mode by name |
 | `cdef.rs` | Direction search, constrained filtering, variance adaptation, damping, and chroma direction mapping; see [CDEF](../av1-cdef.md) for oracle coverage and remaining frame-conformance gaps |
 | `superres.rs` | AV1 §7.16's post-CDEF horizontal eight-tap upscaler; see [AV1 super-resolution](../av1-superres.md) for oracle coverage and the inter-reference boundary |
 | `restoration.rs` | AV1 §7.17 scalar Wiener and self-guided restoration; see [AV1 loop restoration](../av1-loop-restoration.md) for the oracle and active-stream refusals |
@@ -153,11 +153,11 @@ rather than silently dropped — see that file's own module doc.
 - **Extending superres to inter frames**: the decoder already retains
   `refresh_frame_flags`' reference dimensions and uses them in
   `frame_size_with_refs()` before applying the current P frame's
-  `superres_params()`. The real active-superres I→P regression verifies the
-  I frame's complete 9,216-byte dav1d match, then the P frame's named
-  inter-prediction refusal. Add the matching pixel store and block prediction
-  at that established header boundary; do not replace it with inferred
-  geometry.
+  `superres_params()`. It also identifies `frame_reference_mode()` before the
+  active I→P regression reaches its named single-reference block-prediction
+  refusal. Add the matching pixel store, inter CDFs, motion-vector parsing,
+  and block prediction at that established boundary; do not replace it with
+  inferred geometry or a whole-frame copy.
 - Do not add a comparison test without an `#[ignore]`/named-gap doc comment
   unless it actually passes — `tests/oracle.rs` is the place regressions
   and gaps both get recorded, not just the passing cases.

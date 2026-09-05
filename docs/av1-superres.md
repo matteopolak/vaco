@@ -81,10 +81,11 @@ renamed or moved.
 
 The decoder implements the size-only portion of `frame_size_with_refs()`:
 AV1 §5.9.5/§5.9.7/§6.8.6 requires the selected reference's dimensions before
-the current frame's `superres_params()` can determine coded geometry. The
-reference store deliberately retains no pixels yet, and the decoder refuses
-after the P header's frame-level motion flags with `inter prediction is not
-decoded`. Do not treat this header-level result as inter reconstruction.
+the current frame's `superres_params()` can determine coded geometry. It
+then reads the shared frame syntax through `frame_reference_mode()`, and the
+checked-in P fixture is safely refused by name as `single-reference inter
+block prediction is not decoded`. The reference store deliberately retains no
+pixels yet, so this is a header-level boundary, not inter reconstruction.
 
 The issue's Argon profiles are not available in the checked-in media lock, so
 they are not a conformance claim or a reason to close the broader issue.
