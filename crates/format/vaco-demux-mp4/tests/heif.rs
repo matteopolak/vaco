@@ -429,6 +429,30 @@ fn duplicate_item_info_ids_refuse_the_item_file() {
 }
 
 #[test]
+fn a_truncated_item_info_fixed_fields_refuses_the_item_file() {
+    let mut bytes = heif();
+    let fourth_infe = bytes
+        .windows(4)
+        .enumerate()
+        .filter_map(|(offset, kind)| (kind == b"infe").then_some(offset))
+        .nth(3)
+        .unwrap();
+    // Keep only the FullBox header of the thumbnail's `infe`, removing its
+    // fixed item fields. A zero-filled fallback would silently omit item 4.
+    bytes[fourth_infe - 4..fourth_infe].copy_from_slice(&12u32.to_be_bytes());
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    assert!(
+        Mp4Demuxer::open(
+            src,
+            &NoParsers,
+            &FormatOptions::default(),
+            Mp4Options::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn a_truncated_iinf_entry_table_refuses_the_item_file() {
     let mut bytes = heif();
     let iinf = bytes.windows(4).position(|w| w == b"iinf").unwrap();

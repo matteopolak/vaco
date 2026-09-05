@@ -832,7 +832,9 @@ crate decides what becomes a stream:
   primary ID must name a declared image item, rather than
   silently leaving all streams non-default. An `iinf` table must contain every
   declared, valid `infe` entry: a truncated catalogue is refused rather than
-  treated as its valid prefix. An
+  treated as its valid prefix. The fixed `infe` fields and `pitm` item ID must
+  also be completely present; truncation is not interpreted as a zero ID or
+  coding type. An
   ordered association may still name an entity group rather than an `iinf`
   item. Duplicate `dimg` records from one grid are malformed rather than an
   invitation to select the first tile graph. An essential property the resolver cannot

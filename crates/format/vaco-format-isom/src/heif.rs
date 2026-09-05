@@ -74,6 +74,9 @@ impl ItemInfo {
         } else {
             FourCc::new(b"\0\0\0\0")
         };
+        if r.overrun() {
+            return None;
+        }
         let name = if full.version >= 2 {
             let rest = full.body.get(r.pos()..).unwrap_or(&[]);
             let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
@@ -142,11 +145,12 @@ pub fn parse_pitm(pitm: &IsoBox<'_>) -> Option<u32> {
         return None;
     }
     let mut r = full.reader();
-    Some(if full.version == 0 {
+    let item_id = if full.version == 0 {
         u32::from(r.be16())
     } else {
         r.be32()
-    })
+    };
+    (!r.overrun()).then_some(item_id)
 }
 
 /// `construction_method` (§8.11.3.3): where an extent's offset is measured
@@ -612,6 +616,29 @@ mod tests {
     }
 
     #[test]
+    fn infe_refuses_a_truncated_fixed_fields_prefix() {
+        // Version 2 needs item_ID, item_protection_index, and item_type
+        // before the variable-length item_name begins. Missing fields must
+        // not turn into an all-zero, fabricated item.
+        for length in 0..8 {
+            let raw = fullbx(b"infe", 2, 0, &vec![0; length]);
+            assert!(
+                ItemInfo::parse(&first_box(&raw)).is_none(),
+                "length {length}"
+            );
+        }
+        for (version, fixed_length) in [(0, 4usize), (3, 10)] {
+            for length in 0..fixed_length {
+                let raw = fullbx(b"infe", version, 0, &vec![0; length]);
+                assert!(
+                    ItemInfo::parse(&first_box(&raw)).is_none(),
+                    "version {version}, length {length}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn iinf_refuses_entries_past_its_declared_count() {
         // This is the real AVIF item's `infe`, after an `iinf` claiming no
         // entries. The child must not manufacture an item outside the table.
@@ -648,6 +675,14 @@ mod tests {
     fn pitm_rejects_an_unknown_version_or_reserved_flags() {
         for (version, flags, body) in [(2, 0, vec![0, 0, 0, 1]), (0, 1, vec![0, 1])] {
             let raw = fullbx(b"pitm", version, flags, &body);
+            assert_eq!(parse_pitm(&first_box(&raw)), None);
+        }
+    }
+
+    #[test]
+    fn pitm_refuses_a_truncated_item_id() {
+        for (version, length) in [(0, 0usize), (0, 1), (1, 0), (1, 3)] {
+            let raw = fullbx(b"pitm", version, 0, &vec![0; length]);
             assert_eq!(parse_pitm(&first_box(&raw)), None);
         }
     }
