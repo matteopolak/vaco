@@ -170,10 +170,10 @@ impl AacDecoder {
 ///   correlation was near zero because channel 0 held centre content
 ///   while the reference's channel 0 held front-left silence.
 ///
-/// Any other `channel_configuration` (including 0/PCE-explicit, and the
-/// 7/11/12/14 values gated at the configuration layer) is left in
-/// its parsed order — this crate does not yet know their intended output
-/// order, and reordering by count alone would be a guess.
+/// Any other `channel_configuration` (including PCE-explicit layouts whose
+/// element structure does not have a verified map, and the 7/11/12/14 values
+/// gated at the configuration layer) is left in parsed order. Reordering by
+/// count alone would be a guess.
 fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configuration: u8) {
     let perm: &[usize] = match (channel_configuration, channels.len()) {
         (3, 3) => &[1, 2, 0],
@@ -182,6 +182,16 @@ fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configu
         (6, 6) => &[1, 2, 0, 5, 3, 4],
         _ => return,
     };
+    reorder_channels(channels, perm);
+}
+
+/// Reorder exact channel planes with an `output_index -> source_index` map.
+/// A length mismatch is not a map this decoder has established, so leave it
+/// untouched rather than dropping or duplicating a plane.
+fn reorder_channels(channels: &mut Vec<Vec<f32>>, perm: &[usize]) {
+    if channels.len() != perm.len() {
+        return;
+    }
     let reordered: Vec<Vec<f32>> = perm
         .iter()
         .map(|&i| channels.get_mut(i).map(std::mem::take).unwrap_or_default())
@@ -370,6 +380,9 @@ impl Decoder for AacDecoder {
         // `ffmpeg -bitexact`, used for this crate's own verification)
         // expect. Reorder it for the configurations this crate resolves.
         reorder_to_output_channel_order(&mut channels, cfg.channel_configuration);
+        if let Some(permutation) = cfg.pce_output_permutation() {
+            reorder_channels(&mut channels, permutation);
+        }
 
         let samples = channels.first().map_or(0, Vec::len) as u32;
         let layout = cfg

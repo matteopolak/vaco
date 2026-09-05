@@ -54,8 +54,11 @@ pub enum ChannelResolution {
         /// Total channel count, from [`ProgramConfigElement::channel_count`].
         count: u32,
         /// The known native output layout, when this PCE's element ordering
-        /// does not require the decoder to permute planes first.
+        /// has a verified native-plane permutation.
         layout: Option<ChannelLayout>,
+        /// `output_index -> raw_data_block source_index`, when this PCE's
+        /// raw element order differs from its native output layout.
+        permutation: Option<&'static [usize]>,
     },
     /// `channelConfiguration == 0` and no program config element has been
     /// found yet. [`DecoderConfig::try_resolve_pending`] attempts to clear
@@ -231,6 +234,7 @@ impl DecoderConfig {
             self.channels = ChannelResolution::FromPce {
                 count: pce.channel_count(),
                 layout: pce.known_output_layout(),
+                permutation: pce.output_permutation(),
             };
         }
         Ok(())
@@ -248,6 +252,15 @@ impl DecoderConfig {
         }
         match &self.channels {
             ChannelResolution::FromPce { layout, .. } => layout.clone(),
+            ChannelResolution::Known { .. } | ChannelResolution::Pending => None,
+        }
+    }
+
+    /// The verified native-plane permutation for a PCE-derived configuration.
+    #[must_use]
+    pub const fn pce_output_permutation(&self) -> Option<&'static [usize]> {
+        match &self.channels {
+            ChannelResolution::FromPce { permutation, .. } => *permutation,
             ChannelResolution::Known { .. } | ChannelResolution::Pending => None,
         }
     }

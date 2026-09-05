@@ -172,9 +172,12 @@ via [`DecoderConfig::try_resolve_pending`].
 The decoder also keeps a PCE's native output layout when its element order
 already matches output plane order: front-centre mono, front stereo, and a
 front `CPE` plus one `LFE` (`2.1`), or a front `CPE` plus back `CPE`
-(`quad`). More complex PCEs retain their exact channel count but remain
-layout-unspecified until their required plane permutation is implemented and
-verified.
+(`quad`). It also recognises the exact `7.1(wide)` PCE shape of one front
+`SCE`, two front `CPE`s, one back `CPE`, and one `LFE`: its verified raw order
+is front-centre, front-wide pair, front-left/right pair, back pair, LFE, and
+it is permuted into native `FL/FR/FC/LFE/BL/BR/FLC/FRC` order. More complex
+PCEs retain their exact channel count but remain layout-unspecified until their
+required plane permutation is implemented and verified.
 
 For raw ADTS, that PCE is normally present only in the first packet. Once a
 leading PCE resolves a configuration, the decoder retains it for later ADTS
@@ -598,6 +601,15 @@ three-non-silent-tone `2.1` fixture again reported 48 packets and produced
 The same code now rejects a `program_config_element()` after audio elements
 with a named error rather than silently treating it as metadata.
 
+An eight-non-silent-tone `7.1(wide)` AAC-LC ADTS fixture exercises a leading
+PCE shape that ordinary ADTS `channelConfiguration` cannot label directly.
+`ffprobe` reported 47 packets; both decoders emitted **1,540,096 bytes**
+(47 × 1024 samples × 8 channels × 4-byte `f32` samples). The PCE's raw plane
+order was centre, wide pair, front pair, back pair, LFE; Vaco maps it to
+native `FL/FR/FC/LFE/BL/BR/FLC/FRC`. Its eight plane correlations against
+`ffmpeg -bitexact` ranged from −0.000654 to 0.000000 dB from unity, proving
+the map with independent signals rather than channel-count agreement alone.
+
 An independently generated 1.024-second, 48 kHz `quad` ADTS fixture exercised
 the front-`CPE` plus back-`CPE` PCE shape. `ffprobe` reported 48 packets and a
 `quad` layout; both decoders emitted **786,432 bytes** (48 packets × 1024
@@ -777,10 +789,11 @@ plausible-looking implementation that a real bitstream falsifies.
   packets; this limitation concerns only PCEs that follow audio elements in a
   raw data block.
 - **PCE layouts whose element order differs from native output order** retain
-  their channel count but are layout-unspecified. In particular, a centre
-  `SCE` before a front `CPE` needs an explicit plane permutation before it can
-  safely be named as `3.0` or `5.1`; assigning a native layout first would
-  label the decoder's planes incorrectly.
+  their channel count but are layout-unspecified unless they match the one
+  verified `7.1(wide)` structure above. In particular, a centre `SCE` before
+  a front `CPE` needs an explicit plane permutation before it can safely be
+  named; assigning a native layout first would label the decoder's planes
+  incorrectly.
 - **ISO/IEC 14496-26's conformance vector set was not accessible in this
   session** (as already disclosed for #443/#444) — the "Decode accuracy"
   table above is a real measurement against a real decoder's output, not a

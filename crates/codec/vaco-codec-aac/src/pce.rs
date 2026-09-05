@@ -20,6 +20,8 @@ use vaco_core::Error;
 use vaco_core::Result;
 use vaco_parse_aac::AudioObjectType;
 
+const WIDE_71_OUTPUT_PERMUTATION: [usize; 8] = [3, 4, 0, 7, 5, 6, 1, 2];
+
 /// One channel-element reference inside a program config element: whether the
 /// element is a pair (`CPE`, two channels) or single (`SCE`, one channel), and
 /// its `element_instance_tag` (which the corresponding `SCE`/`CPE` header in
@@ -72,6 +74,27 @@ pub struct ProgramConfigElement {
 }
 
 impl ProgramConfigElement {
+    fn is_wide_71_shape(&self) -> bool {
+        matches!(
+            (
+                self.front.as_slice(),
+                self.side.as_slice(),
+                self.back.as_slice(),
+                self.lfe.as_slice(),
+            ),
+            (
+                [
+                    ChannelElementRef { is_cpe: false, .. },
+                    ChannelElementRef { is_cpe: true, .. },
+                    ChannelElementRef { is_cpe: true, .. }
+                ],
+                [],
+                [ChannelElementRef { is_cpe: true, .. }],
+                [_]
+            )
+        )
+    }
+
     /// The total channel count this element describes: front + side + back
     /// (each pair counting 2) plus one per LFE element. Does not count
     /// associated-data or valid-CC elements — neither carries audio.
@@ -83,13 +106,12 @@ impl ProgramConfigElement {
         pairs(&self.front) + pairs(&self.side) + pairs(&self.back) + self.lfe.len() as u32
     }
 
-    /// The output layout when this PCE's element lists describe one of the
-    /// layouts whose syntactic order already matches native plane order.
+    /// The output layout when this PCE's element lists describe a layout with
+    /// either native plane order or a verified plane permutation.
     ///
-    /// More complex PCEs can describe a centre `SCE` before a front `CPE`,
-    /// which requires a plane permutation before assigning a native layout.
-    /// Returning `None` for those preserves the channel count without naming
-    /// a layout whose ordering the decoder has not established.
+    /// More complex PCEs can describe a centre `SCE` before a front `CPE`.
+    /// Returning `None` when their permutation is not established preserves
+    /// the channel count without naming a layout whose ordering is unknown.
     #[must_use]
     pub fn known_output_layout(&self) -> Option<ChannelLayout> {
         match (
@@ -116,8 +138,26 @@ impl ProgramConfigElement {
                 Channel::BackLeft,
                 Channel::BackRight,
             ]),
+            _ if self.is_wide_71_shape() => ChannelLayout::custom([
+                Channel::FrontLeft,
+                Channel::FrontRight,
+                Channel::FrontCenter,
+                Channel::LowFrequency,
+                Channel::BackLeft,
+                Channel::BackRight,
+                Channel::FrontLeftOfCenter,
+                Channel::FrontRightOfCenter,
+            ]),
             _ => None,
         }
+    }
+
+    /// The native-plane permutation for a PCE shape whose element order is
+    /// known to differ from its output layout.
+    #[must_use]
+    pub fn output_permutation(&self) -> Option<&'static [usize]> {
+        self.is_wide_71_shape()
+            .then_some(&WIDE_71_OUTPUT_PERMUTATION)
     }
 
     /// Every channel element this PCE describes, in the order a decoder
@@ -398,6 +438,46 @@ mod tests {
         assert_eq!(
             pce.known_output_layout().map(|layout| layout.mask()),
             Some(0x33)
+        );
+    }
+
+    #[test]
+    fn a_wide_71_pce_exposes_its_native_layout_and_permutation() {
+        let pce = ProgramConfigElement {
+            element_instance_tag: 0,
+            object_type: AudioObjectType::AAC_LC,
+            sampling_frequency_index: 3,
+            front: vec![
+                ChannelElementRef {
+                    is_cpe: false,
+                    tag: 0,
+                },
+                ChannelElementRef {
+                    is_cpe: true,
+                    tag: 0,
+                },
+                ChannelElementRef {
+                    is_cpe: true,
+                    tag: 1,
+                },
+            ],
+            side: vec![],
+            back: vec![ChannelElementRef {
+                is_cpe: true,
+                tag: 2,
+            }],
+            lfe: vec![0],
+            mono_mixdown_element_number: None,
+            stereo_mixdown_element_number: None,
+            matrix_mixdown: None,
+        };
+        assert_eq!(
+            pce.known_output_layout().and_then(|layout| layout.name()),
+            Some("7.1(wide)")
+        );
+        assert_eq!(
+            pce.output_permutation(),
+            Some(&[3, 4, 0, 7, 5, 6, 1, 2][..])
         );
     }
 
