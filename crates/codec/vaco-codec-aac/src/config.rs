@@ -227,13 +227,20 @@ impl DecoderConfig {
     ///
     /// # Errors
     ///
-    /// Never on its own; kept fallible for symmetry with
-    /// [`DecoderConfig::try_resolve_pending`] and because a future check
-    /// (e.g. cross-validating the PCE's own `sampling_frequency_index`
-    /// against this configuration's) belongs here rather than at every call
-    /// site.
+    /// [`Error::InvalidData`] when the PCE's object type or sampling-frequency
+    /// index conflicts with this configuration.
     pub fn resolve_with_pce(&mut self, pce: &ProgramConfigElement) -> Result<()> {
         if self.is_pending() {
+            if pce.object_type != self.object_type {
+                return Err(Error::InvalidData(
+                    "vaco-codec-aac: PCE object type does not match decoder configuration",
+                ));
+            }
+            if pce.sampling_frequency_index != tables::index_for_frequency(self.sample_rate) {
+                return Err(Error::InvalidData(
+                    "vaco-codec-aac: PCE sampling frequency does not match decoder configuration",
+                ));
+            }
             self.channels = ChannelResolution::FromPce {
                 count: pce.channel_count(),
                 layout: pce.known_output_layout(),
@@ -426,6 +433,44 @@ mod tests {
         };
         cfg.resolve_with_pce(&pce).unwrap();
         assert_eq!(cfg.output_layout().map(|layout| layout.mask()), Some(0xb));
+    }
+
+    #[test]
+    fn a_pce_with_a_different_object_type_is_rejected() {
+        let mut cfg = parse(2, 0).unwrap();
+        let pce = ProgramConfigElement {
+            element_instance_tag: 0,
+            object_type: AudioObjectType::AAC_MAIN,
+            sampling_frequency_index: 3,
+            front: Vec::new(),
+            side: Vec::new(),
+            back: Vec::new(),
+            lfe: Vec::new(),
+            mono_mixdown_element_number: None,
+            stereo_mixdown_element_number: None,
+            matrix_mixdown: None,
+        };
+        let error = cfg.resolve_with_pce(&pce).unwrap_err();
+        assert!(error.to_string().contains("PCE object type"));
+    }
+
+    #[test]
+    fn a_pce_with_a_different_sampling_frequency_is_rejected() {
+        let mut cfg = parse(2, 0).unwrap();
+        let pce = ProgramConfigElement {
+            element_instance_tag: 0,
+            object_type: AudioObjectType::AAC_LC,
+            sampling_frequency_index: 4,
+            front: Vec::new(),
+            side: Vec::new(),
+            back: Vec::new(),
+            lfe: Vec::new(),
+            mono_mixdown_element_number: None,
+            stereo_mixdown_element_number: None,
+            matrix_mixdown: None,
+        };
+        let error = cfg.resolve_with_pce(&pce).unwrap_err();
+        assert!(error.to_string().contains("PCE sampling frequency"));
     }
 
     #[test]

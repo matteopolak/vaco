@@ -50,10 +50,8 @@ pub struct ProgramConfigElement {
     /// the tags inside `front`/`side`/`back`/`lfe`, which identify the
     /// channel elements it describes.
     pub element_instance_tag: u8,
-    /// The 2-bit `object_type` field. Unlike `AudioSpecificConfig`'s 5/6-bit
-    /// `audioObjectType`, the PCE's own field is a **plain 2-bit index**
-    /// (0=Main, 1=LC, 2=SSR, 3=LTP by Table 1.14) — a second, narrower object
-    /// type encoding that exists only inside this element.
+    /// The PCE's 2-bit `object_type`, expanded into the corresponding
+    /// `AudioSpecificConfig` object-type value (Main/LC/SSR/LTP).
     pub object_type: AudioObjectType,
     /// `sampling_frequency_index`, 4 bits.
     pub sampling_frequency_index: u8,
@@ -252,7 +250,13 @@ impl ProgramConfigElement {
     /// either.
     pub fn read(r: &mut BitReader<'_>) -> Result<Self> {
         let element_instance_tag = r.get(4) as u8;
-        let object_type = AudioObjectType(r.get(2) as u8);
+        let object_type = match r.get(2) {
+            0 => AudioObjectType::AAC_MAIN,
+            1 => AudioObjectType::AAC_LC,
+            2 => AudioObjectType::AAC_SSR,
+            3 => AudioObjectType::AAC_LTP,
+            _ => unreachable!("PCE object_type is a 2-bit field"),
+        };
         let sampling_frequency_index = r.get(4) as u8;
         let num_front = r.get(4);
         let num_side = r.get(4);
@@ -426,6 +430,7 @@ mod tests {
         let bytes = build_51_like_pce();
         let mut r = BitReader::new(&bytes);
         let pce = ProgramConfigElement::read(&mut r).unwrap();
+        assert_eq!(pce.object_type, AudioObjectType::AAC_LC);
         assert_eq!(pce.channel_count(), 6);
         assert_eq!(pce.front.len(), 2);
         assert_eq!(pce.back.len(), 1);

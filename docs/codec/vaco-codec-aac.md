@@ -112,6 +112,13 @@ declared length. [`ProgramConfigElement::channel_count`] and
 decoder actually needs: how many channels, and in what order to expect their
 `SCE`/`CPE`/`LFE` bitstream headers.
 
+The PCE's compact two-bit profile is expanded to the same `AudioObjectType`
+vocabulary as `AudioSpecificConfig` (Main/LC/SSR/LTP), rather than being
+mistaken for that vocabulary's numeric value. Before a pending configuration
+accepts a PCE, it validates the resulting object type and the PCE's sampling
+frequency index against the enclosing ADTS/ASC configuration. A mismatch is a
+named invalid-data error, not permission to decode under conflicting settings.
+
 For a PCE-derived configuration, the decoder retains that exact sequence,
 including each element's four-bit tag. `raw_data_block()` retains the same
 identity for every audio-bearing element and compares it before any PCM is
@@ -619,6 +626,14 @@ reported 48 packets; Vaco and `ffmpeg -bitexact` each emitted **589,824 bytes**
 (48 × 1024 samples × 3 channels × 4-byte `f32` samples). Its raw
 centre/front-pair order now maps to native `FL/FR/FC`, with per-plane
 correlations from −0.056688 to −0.056060 dB from unity.
+
+After the PCE profile expansion and profile/frequency cross-checks were added,
+a fresh three-tone forced-PCE `3.0` AAC-LC ADTS fixture reported 25 packets.
+Vaco and `ffmpeg -bitexact` each emitted **307,200 bytes** (25 × 1024 samples
+× 3 channels × 4-byte `f32` samples). Its three diagonal plane correlations
+were −0.109392 to −0.090468 dB from unity, while every nonmatching plane pair
+was at or below −20.297475 dB. Synthetic profile and sampling-frequency
+mismatches both reject with named errors before raw audio is decoded.
 
 A six-non-silent-tone `5.1` AAC-LC ADTS fixture, also encoded with `-aac_pce
 1`, reported 48 packets; Vaco and `ffmpeg -bitexact` each emitted
