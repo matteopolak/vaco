@@ -36,7 +36,7 @@
 use vaco_bitstream::BitReader;
 use vaco_chlayout::ChannelLayout;
 use vaco_core::{Error, Result};
-use vaco_parse_aac::{AdtsHeader, AudioObjectType, AudioSpecificConfig, tables};
+use vaco_parse_aac::{AdtsHeader, AudioObjectType, AudioSpecificConfig, Signal, tables};
 
 use crate::pce::{ChannelElementRef, ProgramConfigElement, find_leading_program_config_element};
 
@@ -181,6 +181,12 @@ impl DecoderConfig {
     /// HE-AAC/HE-AACv2 is outside this decoder's scope.
     pub fn from_audio_specific_config(cfg: &AudioSpecificConfig) -> Result<Self> {
         Self::gate_object_type(cfg.object_type)?;
+        if cfg.ps == Signal::Present {
+            return Err(Error::Unsupported(
+                "vaco-codec-aac: Parametric Stereo (HE-AACv2) is not implemented — \
+                 refusing a mono core as stereo output",
+            ));
+        }
         if cfg.has_sbr() {
             return Err(Error::Unsupported(
                 "vaco-codec-aac: SBR (HE-AAC) is not implemented — #446, not this crate",

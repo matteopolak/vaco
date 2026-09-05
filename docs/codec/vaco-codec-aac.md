@@ -543,6 +543,15 @@ headerless HE-AAC access unit after its explicit-SBR error and have it decoded
 under the preceding AAC-LC configuration; it fails packet configuration and
 queues no frame.
 
+Explicit **Parametric Stereo** uses the second backward-compatible sync
+extension after present SBR: `syncExtensionType=0x548`, followed by
+`psPresentFlag`. The decoder checks that parsed `Signal::Present` before the
+generic SBR check and returns a named HE-AACv2 refusal. This matters because PS
+would otherwise make a mono core appear as stereo output; the refusal is made
+before any packet is accepted, so no AAC-LC frame is reconstructed from that
+configuration. The deterministic extension fixture verifies this parser route;
+it does not claim a newly generated HE-AACv2 sample or PS PCM result.
+
 A real `afconvert`-produced ADTS HE-AAC file confirmed the **implicit**
 case directly: its raw ADTS header declares plain `profile=1` (AAC-LC),
 `sampling_frequency_index=7` (22050 Hz) — nothing in the ADTS header

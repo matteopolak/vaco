@@ -581,6 +581,24 @@ mod tests {
         bytes
     }
 
+    fn explicit_ps_audio_specific_config() -> Vec<u8> {
+        use vaco_bitstream::BitWriter;
+        let mut w = BitWriter::new();
+        w.put(5, 2); // AAC-LC core object type
+        w.put(4, 7); // 22050 Hz core rate
+        w.put(4, 1); // mono core
+        w.put(1, 0); // frameLengthFlag
+        w.put(1, 0); // dependsOnCoreCoder
+        w.put(1, 0); // extensionFlag
+        w.put(11, 0x2b7); // syncExtensionType: SBR
+        w.put(5, 5); // extensionAudioObjectType: SBR
+        w.put(1, 1); // sbrPresentFlag
+        w.put(4, 4); // extensionSamplingFrequencyIndex: 44100 Hz
+        w.put(11, 0x548); // syncExtensionType: Parametric Stereo
+        w.put(1, 1); // psPresentFlag
+        w.finish()
+    }
+
     /// The first raw data block supplies a mono PCE before its SCE. Later
     /// ADTS blocks carry only the SCE and rely on that in-band configuration.
     fn adts_frame_with_leading_mono_pce_with_sce_tag(sce_tag: u32) -> Vec<u8> {
@@ -816,6 +834,19 @@ mod tests {
 
         let error = dec.send_packet(Some(&packet)).unwrap_err();
         assert!(matches!(error, Error::UnexpectedEof), "{error}");
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    #[test]
+    fn explicit_ps_extradata_is_refused_before_frame_output() {
+        let extradata = explicit_ps_audio_specific_config();
+        let asc = vaco_parse_aac::AudioSpecificConfig::parse(&extradata).unwrap();
+        assert!(asc.has_sbr());
+        assert!(matches!(asc.ps, vaco_parse_aac::Signal::Present));
+
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let error = dec.set_extradata(&extradata).unwrap_err();
+        assert!(error.to_string().contains("Parametric Stereo"));
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 
