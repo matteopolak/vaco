@@ -194,8 +194,7 @@ fn active_superres_reference_frame_is_exact_before_inter_prediction_refusal() {
         .expect_err("inter frame requires a reference store and inter prediction");
     assert!(matches!(
         error,
-        Error::Unsupported(
-            "vaco-codec-av1: single-reference inter block prediction is not decoded"
-        )
+        Error::Unsupported("vaco-codec-av1: inter block mode info is not decoded")
     ));
+    assert!(matches!(decoder.receive_frame(), Err(Error::NeedMoreInput)));
 }

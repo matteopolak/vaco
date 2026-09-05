@@ -14,16 +14,16 @@
 //! `delta_q_params()`/`delta_lf_params()`, `loop_filter_params()`/
 //! `cdef_params()`/`lr_params()` (CDEF parameters are retained for filtering;
 //! restoration modes are retained for explicit scope checks),
-//! `read_tx_mode()` and the bounded inter `frame_reference_mode()` prefix
-//! (which selects a named refusal before block symbols are read), then intra
-//! `skip_mode_params()`/`global_motion_params()` no-op assignments,
+//! `read_tx_mode()` and the bounded inter `frame_reference_mode()` through
+//! identity `global_motion_params()` (before tile block symbols are read),
+//! then intra `skip_mode_params()`/`global_motion_params()` no-op assignments,
 //! `reduced_tx_set` and `film_grain_params()` (parsed in full for bit
 //! alignment; grain synthesis is issue #343).
 //!
 //! An inter frame's header (`FrameIsIntra == 0`) is parsed through its
-//! reference-derived size, frame-level motion flags, and
-//! `frame_reference_mode()`. The decoder then returns [`Error::Unsupported`]
-//! before block inter prediction is touched.
+//! reference-derived size, frame-level motion flags, and its identity global
+//! motion form. The decoder then returns [`Error::Unsupported`] before block
+//! inter prediction is touched.
 //!
 //! `Vaco-Spec-Ref: aom-av1-spec §5.9 (frame header OBU syntax)`.
 
@@ -520,23 +520,32 @@ fn parse_inner(
     } else {
         TxMode::Largest
     };
-    if !is_intra {
+    let reduced_tx_set = if is_intra {
+        // skip_mode_params(): a no-op when FrameIsIntra, with no bits read.
+        // allow_warped_motion: FrameIsIntra forces 0, no bit read.
+        r.get_bit() != 0
+    } else {
         let reference_select = r.get_bit() != 0;
         if reference_select {
             return Err(Error::Unsupported(
                 "vaco-codec-av1: compound-reference inter block prediction is not decoded",
             ));
         }
-        return Err(Error::Unsupported(
-            "vaco-codec-av1: single-reference inter block prediction is not decoded",
-        ));
+        // A single-reference frame has SkipModePresent = 0, so
+        // skip_mode_params() consumes no bit.
+        let _allow_warped_motion = r.get_bit() != 0;
+        let reduced_tx_set = r.get_bit() != 0;
+        parse_identity_global_motion(r)?;
+        if seq.film_grain_params_present {
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: inter frame film grain parameters are not decoded",
+            ));
+        }
+        reduced_tx_set
+    };
+    if is_intra {
+        parse_film_grain_params(r, seq, frame_type, show_frame, false);
     }
-    // skip_mode_params(): a no-op when FrameIsIntra, with no bits read.
-    // allow_warped_motion: FrameIsIntra forces 0, no bit read.
-    let reduced_tx_set = r.get_bit() != 0;
-    // global_motion_params(): FrameIsIntra returns immediately after
-    // setting identity defaults, no bits read.
-    parse_film_grain_params(r, seq, frame_type, show_frame, false);
 
     Ok(FrameHeader {
         frame_type,
@@ -619,6 +628,20 @@ fn parse_interpolation_filter(r: &mut BitReader<'_>) {
     if !is_filter_switchable {
         let _interpolation_filter = r.get(2);
     }
+}
+
+/// `global_motion_params()`, §5.9: consume the identity form for every
+/// inter-reference. A non-identity transform needs the still-unimplemented
+/// global-motion predictor, so it is rejected before tile mode syntax.
+fn parse_identity_global_motion(r: &mut BitReader<'_>) -> Result<()> {
+    for _ in 0..REFS_PER_FRAME {
+        if r.get_bit() != 0 {
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: non-identity global motion is not decoded",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[allow(

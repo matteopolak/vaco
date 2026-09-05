@@ -509,6 +509,11 @@ fn decode_frame(
     tile_group_payload: &[u8],
     budget: &mut Budget,
 ) -> Result<Frame> {
+    if !fh.frame_type.is_intra() {
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: inter block mode info is not decoded",
+        ));
+    }
     check_restoration_scope(fh)?;
     let mi_cols = 2 * ((fh.size.coded_width + 7) >> 3);
     let mi_rows = 2 * ((fh.size.coded_height + 7) >> 3);
