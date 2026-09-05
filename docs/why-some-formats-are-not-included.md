@@ -67,9 +67,10 @@ the family `ffmpeg -formats` lists as `libopenmpt` — entirely through
 native playback path to implement under this rule: the container framing and
 the tracker playback engine are the same code in `libopenmpt`, so "native
 container, FFI decoder" is not an option the way it is for, say, AV1. Vaco's
-separate `vaco-format-misc-audio` crate does provide a bounded, structural XM
-v1.04 demuxer for framing and sample-payload inspection; it does not decode
-samples or render tracker patterns, and therefore does not make XM playable.
+separate `vaco-format-misc-audio` crate does provide bounded structural XM
+v1.04 and four-channel ProTracker MOD demuxers for framing and sample-payload
+inspection; neither decodes samples or renders tracker patterns, and therefore
+neither makes its format playable.
 Playback remains out of scope for the same reason as the codecs above
 (FM-58's chiptune-adjacent survey, 2026-08-27).
 

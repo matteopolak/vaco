@@ -5,8 +5,8 @@ Layer 4. Demux-only: `wv`, `tta`, `amr`/`amrnb`/`amrwb`, `adx`,
 speech-codec tail (`gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`,
 `g729`, `aptx`, `aptx_hd`), and — added across two later passes at #620's
 chiptune-adjacent game-audio containers — `vag`, `svag`, `xwma`, `xa`, and
-bounded `bfstm`/`brstm` subsets, plus the bounded XM structural reader.
-Twenty-eight registered demuxers in one crate (FM-58).
+bounded `bfstm`/`brstm` subsets, plus bounded XM and ProTracker MOD
+structural readers. Twenty-nine registered demuxers in one crate (FM-58).
 These are
 containers: the job is finding frame/block boundaries and reporting stream
 parameters, not decoding audio.
@@ -32,6 +32,7 @@ parameters, not decoding audio.
 | `brstm` | `brstm` | Nintendo `RSTM`/`HEAD`/`ADPC`/`DATA`, measured only for stereo DSP-ADPCM with 32/64/96/256-byte channel blocks and full/half final blocks; packets synthesize `be32(raw bytes)`/`be32(samples)`, two 32-byte coefficient sets, and one 8-byte ADPC history entry before the unpadded channel payload — see below |
 | `xwma` | `xwma` | RIFF container (`fmt `/`dpds`/`data` chunks); packets are `nBlockAlign`-aligned reads of `data`, not the `dpds` table's declared split — see below |
 | `xm` | `xm` | FastTracker 2 v1.04 little-endian module header, pattern blocks, instrument/sample headers, and one packet per non-empty sample payload; structural only — no tracker playback or sample decoding |
+| `protracker` | `mod` | ProTracker four-channel `M.K.` header, order table, fixed 64-row pattern blocks, and one packet per non-empty signed 8-bit sample payload; structural only |
 | `xa` | `xa` | fixed 24-byte header (2-byte `"XA"` magic, little-endian `WAVEFORMATEX` tail), then EA-ADPCM blocks (`15`/`30` bytes mono/stereo, `28` samples each); packet count is `ceil(dwOutSize / block_bytes)` clamped to the blocks on disk, but `duration`/`duration_ts` ignore `dwOutSize` and reflect the file's own full block count instead — a real, measured disagreement in the reference itself, reproduced rather than "corrected" — see `xa.rs`'s module doc |
 | `block` | shared | `BlockDemuxer` — the fixed-ratio block engine `adx`, `nistsphere`, `pvf` and every `rawcodec` entry reduce to |
 
@@ -64,7 +65,7 @@ left unresolved on purpose. See "The `BlockDemuxer` batching bug" below.
 structural demux path. It accepts only the published v1.04 layout, reports
 sample payload boundaries, and deliberately does not render patterns or
 decode tracker sample data. Tracker playback and the remaining tracker formats
-(IT, S3M, MOD, and the rest of the family the reference reaches through
+(IT, S3M, and the rest of the family the reference reaches through
 `libopenmpt`) remain excluded — see
 `docs/why-some-formats-are-not-included.md`. Of the twelve chiptune-adjacent
 game-audio containers, `vag` and `xwma` landed in an earlier pass, followed by
@@ -114,6 +115,26 @@ Older revisions, non-standard variable header sizes, nonzero pattern packing,
 reserved sample flag bits, malformed counts, and truncated ranges are explicit
 refusals. This is container framing, not playback or a claim of ffmpeg
 interoperability.
+
+### `protracker` — bounded four-channel MOD structural demux
+
+The reader follows the published [Protracker Module
+layout](https://wiki.multimedia.cx/index.php/Protracker_Module), cross-checked
+against [Greg Kennedy's field table](https://greg-kennedy.com/tracker/modformat.html).
+It accepts the `M.K.` four-channel revision: 20-byte title, 31 fixed 30-byte
+sample headers, one-byte song/restart fields, 128-byte order table, and 64-row
+patterns of four 4-byte events. Sample lengths are big-endian words; payloads
+are exposed as signed 8-bit mono structural streams, without claiming a
+playback rate or decoding periods/effects.
+
+The implementation bounds pattern indexes to 64, validates sample volume and
+loop ranges, checks every declared extent before skipping, caps cumulative
+sample bytes at 1 GiB, and requires seekable input because payload packets are
+emitted after the pattern scan. Non-`M.K.` revisions, malformed loops, and
+truncated structures are explicit refusals. The source-built minimal fixture
+was independently identified by `file 5.41` as `4-channel Protracker module
+sound data Title: "Minimal Vaco MOD"`; the checked-in test then compares its
+sample packet bytes and offset against the same fixture.
 
 ### `bfstm` — measured stereo DSP-ADPCM packet synthesis
 

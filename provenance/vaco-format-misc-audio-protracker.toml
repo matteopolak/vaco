@@ -1,0 +1,20 @@
+[[source]]
+id = "protracker-module-format"
+kind = "spec"
+title = "Protracker Module Format (MultimediaWiki)"
+acquired = "2026-09-04"
+where = "https://wiki.multimedia.cx/index.php/Protracker_Module"
+
+[[source]]
+id = "protracker-module-fields"
+kind = "spec"
+title = "Protracker Module Format (Greg Kennedy)"
+acquired = "2026-09-04"
+where = "https://greg-kennedy.com/tracker/modformat.html"
+
+[[source]]
+id = "protracker-file-identification"
+kind = "blackbox"
+title = "file(1) identification of the checked-in minimal M.K. fixture"
+acquired = "2026-09-04"
+where = "file 5.41 on the development machine"

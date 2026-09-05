@@ -15,6 +15,7 @@ pub mod brstm;
 pub mod g723;
 pub mod nistsphere;
 pub mod pvf;
+pub mod protracker;
 pub mod qoa;
 pub mod rawcodec;
 pub mod sbc;

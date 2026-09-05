@@ -230,3 +230,11 @@ long_name  = "FastTracker 2 Extended Module"
 feature    = "demux-xm"
 ctor       = "vaco_format_misc_audio::xm::DEMUXER"
 extensions = "xm"
+
+[[component]]
+kind       = "demuxer"
+name       = "mod"
+long_name  = "ProTracker Module"
+feature    = "demux-mod"
+ctor       = "vaco_format_misc_audio::protracker::DEMUXER"
+extensions = "mod"

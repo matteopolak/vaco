@@ -1011,6 +1011,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["j2k"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-mod")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mod",
+        long_name: Some("ProTracker Module"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-mod"),
+        media: None,
+        codec: None,
+        extensions: &["mod"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-mp4")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -10765,6 +10777,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_MJPEG,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_MJPEG_2000,
+    #[cfg(feature = "demux-mod")]
+    &::vaco_format_misc_audio::protracker::DEMUXER,
     #[cfg(feature = "demux-mp4")]
     &::vaco_demux_mp4::DEMUXER,
     #[cfg(feature = "demux-mp3")]
