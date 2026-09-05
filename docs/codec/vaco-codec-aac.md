@@ -147,15 +147,26 @@ native front-left/front-right/front-centre/back-centre order. Per-plane
 `axcorrelate` RMS levels were −0.000283 to −0.000015 dB from unity, confirming
 both the output count and the otherwise easy-to-miss centre/front-pair swap.
 
-### Channel-configuration coverage: 1, 2, 4, 5, 6 direct; 0 via PCE; the rest gated
+#### Direct 3.0: plane order verified against `ffmpeg`
+
+Three separate 48 kHz sine sources (220/330/440 Hz) were joined explicitly as
+`3.0` before AAC-LC ADTS encoding, so all three reference planes carry energy.
+`ffprobe` reports `channelConfiguration = 3`, a `3.0` layout, and 48 packets.
+Vaco and `ffmpeg -bitexact` each emitted **589,824 bytes**: 48 × 1024 samples
+× 3 channels × 4-byte `f32` samples. The syntactic centre/front-pair order is
+permuted to native front-left/front-right/front-centre; per-plane `axcorrelate`
+RMS levels were −0.012389 to −0.012037 dB from unity, which verifies the map
+with three independently non-silent signals.
+
+### Channel-configuration coverage: 1, 2, 3, 4, 5, 6 direct; 0 via PCE; the rest gated
 
 [`DecoderConfig::from_adts_header`] and
 [`DecoderConfig::from_audio_specific_config`] both resolve
-`channelConfiguration` 1 (mono), 2 (stereo), 4 (4.0), 5 (5.0) and 6 (5.1)
-directly — the overwhelming majority of real AAC-LC content, and the five
-configurations this crate could state the exact `SCE`/`CPE`/`LFE` element
-ordering for with
-confidence. `channelConfiguration == 0` resolves exactly, from a real PCE,
+`channelConfiguration` 1 (mono), 2 (stereo), 3 (3.0), 4 (4.0), 5 (5.0) and 6
+(5.1) directly — the overwhelming majority of real AAC-LC content, and the
+six configurations this crate could state the exact `SCE`/`CPE`/`LFE` element
+ordering for with confidence. `channelConfiguration == 0` resolves exactly,
+from a real PCE,
 via [`DecoderConfig::try_resolve_pending`].
 
 The decoder also keeps a PCE's native output layout when its element order
@@ -172,7 +183,7 @@ later leading PCE still takes precedence, so an in-band configuration change
 is not hidden by the cache; a cached PCE is reused only when object type,
 sample rate, and frame length still match the current ADTS header.
 
-**Configurations 3, 7, 11, 12 and 14 are rejected with
+**Configurations 7, 11, 12 and 14 are rejected with
 `Error::Unsupported` rather than resolved from a recalled element ordering.**
 ISO/IEC 14496-3's Table 42 states the exact `SCE`/`CPE`/`LFE` sequence each of
 these implies, and this crate does not have that table's text in hand to
@@ -368,7 +379,7 @@ output channel order.** `channels_for_config(6)`'s bitstream order is
 fixture's *per-channel* correlation was already solid (~0.98 for the one
 channel carrying content) but the interleaved, whole-frame correlation was
 effectively zero, because the content sat on a different channel index in
-each stream. Only configurations 1, 2, 4, 5 and 6 — the ones this crate resolves
+each stream. Only configurations 1, 2, 3, 4, 5 and 6 — the ones this crate resolves
 without a program config element — are permuted; anything else is left in
 parsed order rather than guessed at.
 
@@ -733,13 +744,13 @@ plausible-looking implementation that a real bitstream falsifies.
 - **`coupling_channel_element()` (`CCE`) is not implemented** —
   `Error::Unsupported`. It carries its own `individual_channel_stream()`
   plus a per-coupled-element gain list this crate has not transcribed.
-  Rare in real 1/2/4/5/6-channel content (this crate's resolved
+  Rare in real 1/2/3/4/5/6-channel content (this crate's resolved
   configurations); gated rather than guessed at.
-- **`channelConfiguration` 3, 7, 11, 12, 14** are gated (see "Channel-
+- **`channelConfiguration` 7, 11, 12, 14** are gated (see "Channel-
   configuration coverage" above), pending ISO/IEC 14496-3 Table 42's exact
   element ordering being checked against a primary copy rather than
   recalled. `reorder_to_output_channel_order` (`decoder.rs`) only knows the
-  output permutation for 1, 2, 4, 5 and 6 for the same reason.
+  output permutation for 1, 2, 3, 4, 5 and 6 for the same reason.
 - **HE-AAC/HE-AACv2 (SBR, Parametric Stereo)** are explicitly rejected at
   the configuration layer — #446/#447, a different (and each individually
   substantial) package, per this issue's own dispatch.
@@ -774,13 +785,13 @@ plausible-looking implementation that a real bitstream falsifies.
   from-primary-text transcription (e.g. a from-spec reference decoder's own
   source, read for its citation rather than copied) to check the
   1024/448/128/448 split in `reconstruct::build_window` against.
-- **Adding a `channelConfiguration` value (3/7/11/12/14):** get ISO/IEC
+- **Adding a `channelConfiguration` value (7/11/12/14):** get ISO/IEC
   14496-3 Table 42's element ordering for that value from a primary copy,
   add it to `config.rs`'s `known_channel_count` (renaming/restructuring it
   to carry an element order, not just a count, since that is what a real
-  decoder needs), a unit test alongside the existing 1/2/4/5/6 cases, and a
+  decoder needs), a unit test alongside the existing 1/2/3/4/5/6 cases, and a
   matching entry in `decoder.rs`'s `reorder_to_output_channel_order`. Do not
-  extrapolate an ordering from the ones already here — 1/2/4/5/6 were chosen
+  extrapolate an ordering from the ones already here — 1/2/3/4/5/6 were chosen
   specifically because they were confident, not because they generalise.
 - **Adding `coupling_channel_element()`:** transcribe Table 4.8's syntax
   (`ind_sw_cce_flag`, `num_coupled_elements`, the per-coupled-element gain
@@ -864,7 +875,7 @@ formula and windowing/block-switching, including the KBD construction now
 in `vaco-codec-dsp-sinewin`), Table 4.156/4.157 (`TNS_MAX_ORDER`/
 `TNS_MAX_BANDS`), and Table 42 (channel-configuration element ordering,
 `13818-7` — backing `decoder.rs`'s `reorder_to_output_channel_order` for
-configurations 1, 2, 4, 5 and 6).
+configurations 1, 2, 3, 4, 5 and 6).
 
 Added by #446 (SBR, in progress — see "SBR (#446)" above): §4.6.18.4.1-3
 (QMF analysis/synthesis/downsampled-synthesis filterbanks, `qmf.rs`),
