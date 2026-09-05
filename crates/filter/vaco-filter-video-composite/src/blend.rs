@@ -235,6 +235,10 @@ fn composite_planar(
     mode: AlphaMode,
 ) -> Result<()> {
     let alpha_plane = geom::alpha_component(format).map(|c| c.plane);
+    if alpha_plane.is_none() {
+        copy_opaque_planar(main, overlay, format, rect)?;
+        return Ok(());
+    }
     let bg_alpha = alpha_plane.map(|ap| snapshot_alpha(main, ap, rect.main_x, rect.main_y, rect));
     let fg_alpha = alpha_plane.map(|ap| snapshot_alpha(overlay, ap, rect.ov_x, rect.ov_y, rect));
     let color_planes = format.plane_count();
@@ -259,6 +263,58 @@ fn composite_planar(
     // agrees exactly with what the colour planes just blended against.
     if let Some(ap) = alpha_plane {
         write_alpha_plane(main, ap, rect, fg_alpha.as_deref(), bg_alpha.as_deref());
+    }
+    Ok(())
+}
+
+/// Copy every colour plane for a format with no alpha channel. The over
+/// equation reduces to the foreground sample for every alpha mode, including
+/// subsampled chroma planes, so a plane-local span copy is exact.
+fn copy_opaque_planar(
+    main: &mut Frame,
+    overlay: &Frame,
+    format: PixFmt,
+    rect: ClippedRect,
+) -> Result<()> {
+    for plane in 0..format.plane_count() {
+        let plane = plane as u8;
+        let unit = geom::plane_unit_bytes(format, plane)?;
+        let main_x = geom::plane_coord(rect.main_x, format, plane, true);
+        let main_y = geom::plane_coord(rect.main_y, format, plane, false);
+        let ov_x = geom::plane_coord(rect.ov_x, format, plane, true);
+        let ov_y = geom::plane_coord(rect.ov_y, format, plane, false);
+        let width = format.plane_width(rect.width, plane).max(1) as usize;
+        let height = format.plane_height(rect.height, plane).max(1);
+        let Some(row_bytes) = width.checked_mul(unit) else {
+            continue;
+        };
+        let Some(mut main_plane) = main.plane_mut(plane as usize) else {
+            continue;
+        };
+        let Some(ov_plane) = overlay.plane(plane as usize) else {
+            continue;
+        };
+        for row in 0..height {
+            let Some(dst_row) = main_plane.row_mut(main_y.saturating_add(row) as usize) else {
+                continue;
+            };
+            let Some(src_row) = ov_plane.row(ov_y.saturating_add(row) as usize) else {
+                continue;
+            };
+            let Some(dst_start) = (main_x as usize).checked_mul(unit) else {
+                continue;
+            };
+            let Some(src_start) = (ov_x as usize).checked_mul(unit) else {
+                continue;
+            };
+            let Some(dst) = dst_row.get_mut(dst_start..dst_start.saturating_add(row_bytes)) else {
+                continue;
+            };
+            let Some(src) = src_row.get(src_start..src_start.saturating_add(row_bytes)) else {
+                continue;
+            };
+            dst.copy_from_slice(src);
+        }
     }
     Ok(())
 }
@@ -309,6 +365,10 @@ fn composite_packed(
 ) -> Result<()> {
     let unit = geom::plane_unit_bytes(format, 0)?;
     let alpha_offset = geom::alpha_component(format).map(|c| c.offset as usize);
+    if alpha_offset.is_none() {
+        copy_opaque_packed(main, overlay, rect, unit);
+        return Ok(());
+    }
     let color_offsets: Vec<usize> = format
         .descriptor()
         .components
@@ -364,6 +424,44 @@ fn composite_packed(
         }
     }
     Ok(())
+}
+
+/// An opaque packed overlay replaces each covered destination pixel exactly,
+/// independent of its alpha-mode option. Avoid the floating-point over formula
+/// in that case and copy contiguous clipped spans instead.
+fn copy_opaque_packed(main: &mut Frame, overlay: &Frame, rect: ClippedRect, unit: usize) {
+    let Some(row_bytes) = (rect.width as usize).checked_mul(unit) else {
+        return;
+    };
+    let Some(mut main_plane) = main.plane_mut(0) else {
+        return;
+    };
+    let Some(ov_plane) = overlay.plane(0) else {
+        return;
+    };
+    for row in 0..rect.height {
+        let my = rect.main_y.saturating_add(row);
+        let oy = rect.ov_y.saturating_add(row);
+        let Some(dst_row) = main_plane.row_mut(my as usize) else {
+            continue;
+        };
+        let Some(src_row) = ov_plane.row(oy as usize) else {
+            continue;
+        };
+        let Some(dst_start) = (rect.main_x as usize).checked_mul(unit) else {
+            continue;
+        };
+        let Some(src_start) = (rect.ov_x as usize).checked_mul(unit) else {
+            continue;
+        };
+        let Some(dst) = dst_row.get_mut(dst_start..dst_start.saturating_add(row_bytes)) else {
+            continue;
+        };
+        let Some(src) = src_row.get(src_start..src_start.saturating_add(row_bytes)) else {
+            continue;
+        };
+        dst.copy_from_slice(src);
+    }
 }
 
 /// Blend one non-alpha plane (a colour channel) of a planar format, sampling
@@ -486,6 +584,7 @@ fn write_alpha_plane(
 )]
 mod tests {
     use super::*;
+    use vaco_frame::FramePool;
 
     #[test]
     fn straight_matches_the_measured_probe() {
@@ -555,6 +654,43 @@ mod tests {
         let r = clip(2, 2, 4, 4, 10, 10).unwrap();
         assert_eq!((r.main_x, r.main_y, r.ov_x, r.ov_y), (2, 2, 0, 0));
         assert_eq!((r.width, r.height), (4, 4));
+    }
+
+    #[test]
+    fn opaque_packed_overlay_copies_the_clipped_rectangle() {
+        let pool = FramePool::default();
+        let mut main = pool.acquire_video(PixFmt::Rgb24, 4, 2).unwrap();
+        let mut foreground = pool.acquire_video(PixFmt::Rgb24, 3, 2).unwrap();
+        {
+            let mut plane = main.plane_mut(0).unwrap();
+            plane.fill(0x10);
+        }
+        for y in 0..2 {
+            let mut plane = foreground.plane_mut(0).unwrap();
+            let row = plane.row_mut(y).unwrap();
+            for x in 0..3 {
+                let start = x * 3;
+                row[start..start + 3].copy_from_slice(&[x as u8, y as u8, 0xee]);
+            }
+        }
+        let rect = clip(1, 0, 3, 2, 4, 2).unwrap();
+        composite(
+            &mut main,
+            &foreground,
+            PixFmt::Rgb24,
+            rect,
+            AlphaMode::Premultiplied,
+        )
+        .unwrap();
+
+        for y in 0..2 {
+            let row = main.plane(0).unwrap().row(y).unwrap();
+            assert_eq!(&row[..3], &[0x10; 3]);
+            for x in 0..3 {
+                let start = (x + 1) * 3;
+                assert_eq!(&row[start..start + 3], &[x as u8, y as u8, 0xee]);
+            }
+        }
     }
 
     proptest::proptest! {

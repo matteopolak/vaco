@@ -115,40 +115,49 @@ impl Filter {
             f64::from(sample::max_value(cg)),
             f64::from(sample::max_value(cb)),
         );
-        let (Some(pr), Some(pg), Some(pb)) = (
-            input.plane(cr.plane as usize),
-            input.plane(cg.plane as usize),
-            input.plane(cb.plane as usize),
-        ) else {
-            return;
+        let (w, rows) = {
+            let Some(red) = input.plane(cr.plane as usize) else {
+                return;
+            };
+            (
+                red.row_bytes()
+                    .checked_div(usize::from(cr.step.max(1)))
+                    .unwrap_or(0),
+                red.rows(),
+            )
         };
-        let w = pr
-            .row_bytes()
-            .checked_div(usize::from(cr.step.max(1)))
-            .unwrap_or(0);
-        let rows = pr.rows();
-        let src: Vec<Vec<(u16, u16, u16)>> = (0..rows)
-            .map(|y| {
-                let (Some(rr), Some(rg), Some(rb)) = (pr.row(y), pg.row(y), pb.row(y)) else {
-                    return Vec::new();
-                };
-                (0..w)
-                    .map(|x| {
-                        (
-                            sample::read(rr, x, cr, big_endian),
-                            sample::read(rg, x, cg, big_endian),
-                            sample::read(rb, x, cb, big_endian),
-                        )
-                    })
-                    .collect()
-            })
-            .collect();
+        // RGB is never changed by colorkey, so only one row needs to outlive
+        // the immutable source borrow before the alpha plane is written.
+        let mut src = vec![(0u16, 0u16, 0u16); w];
         let alpha_max = f64::from(sample::max_value(alpha_comp));
-        let mut planes = input.planes_mut();
         for y in 0..rows {
-            let Some(row_src) = src.get(y) else { continue };
+            {
+                let (Some(pr), Some(pg), Some(pb)) = (
+                    input.plane(cr.plane as usize),
+                    input.plane(cg.plane as usize),
+                    input.plane(cb.plane as usize),
+                ) else {
+                    return;
+                };
+                let (Some(rr), Some(rg), Some(rb)) = (pr.row(y), pg.row(y), pb.row(y)) else {
+                    continue;
+                };
+                for (x, values) in src.iter_mut().enumerate() {
+                    *values = (
+                        sample::read(rr, x, cr, big_endian),
+                        sample::read(rg, x, cg, big_endian),
+                        sample::read(rb, x, cb, big_endian),
+                    );
+                }
+            }
+            let Some(mut alpha_plane) = input.plane_mut(alpha_comp.plane as usize) else {
+                return;
+            };
+            let Some(alpha_row) = alpha_plane.row_mut(y) else {
+                continue;
+            };
             for x in 0..w {
-                let Some(&(vr, vg, vb)) = row_src.get(x) else {
+                let Some(&(vr, vg, vb)) = src.get(x) else {
                     continue;
                 };
                 let p = [
@@ -164,12 +173,7 @@ impl Filter {
                     reason = "frac in [0, 1], product in [0, alpha_max] and alpha_max fits u16 by construction; truncation is the measured reference rule"
                 )]
                 let alpha = (frac * alpha_max) as u16;
-                if let Some(row) = planes
-                    .get_mut(alpha_comp.plane as usize)
-                    .and_then(|p| p.row_mut(y))
-                {
-                    sample::write(row, x, alpha_comp, big_endian, alpha);
-                }
+                sample::write(alpha_row, x, alpha_comp, big_endian, alpha);
             }
         }
     }
@@ -331,5 +335,44 @@ mod tests {
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(&row[0..3], &[12, 34, 56]);
+    }
+
+    #[test]
+    fn multiple_rows_keep_each_pixels_rgb_while_replacing_alpha() {
+        let mut budget = Budget::new(Limits::strict());
+        let mut frame = Frame::alloc_video(&mut budget, PixFmt::Rgba, 3, 2).unwrap();
+        let input = [
+            [0, 0, 0, 12],
+            [255, 0, 0, 34],
+            [0, 255, 0, 56],
+            [0, 0, 255, 78],
+            [0, 0, 0, 90],
+            [255, 255, 255, 123],
+        ];
+        for (y, pixels) in input.chunks_exact(3).enumerate() {
+            let mut plane = frame.plane_mut(0).unwrap();
+            let row = plane.row_mut(y).unwrap();
+            for (x, pixel) in pixels.iter().enumerate() {
+                let start = x * 4;
+                row[start..start + 4].copy_from_slice(pixel);
+            }
+        }
+        let f = Filter {
+            key: [0.0, 0.0, 0.0],
+            similarity: 0.01,
+            blend: 0.0,
+        };
+        f.apply_frame(&mut frame);
+
+        let expected_alpha = [0, 255, 255, 255, 0, 255];
+        for (y, pixels) in input.chunks_exact(3).enumerate() {
+            let row = frame.plane(0).unwrap().row(y).unwrap();
+            for (x, pixel) in pixels.iter().enumerate() {
+                let index = y * 3 + x;
+                let start = x * 4;
+                assert_eq!(&row[start..start + 3], &pixel[..3]);
+                assert_eq!(row[start + 3], expected_alpha[index]);
+            }
+        }
     }
 }

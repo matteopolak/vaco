@@ -371,6 +371,17 @@ impl FrameSyncFilter for Filter {
                     continue;
                 };
                 let n = a_row.len().min(b_row.len()).min(dst_row.len());
+                // `normal` always returns the first input, and opacity blends
+                // that value back toward the same first input. A span copy is
+                // therefore exact for every valid opacity, including a short
+                // malformed row where only `n` bytes are addressable.
+                if mode == Mode::Normal {
+                    let (Some(src), Some(dst)) = (a_row.get(..n), dst_row.get_mut(..n)) else {
+                        continue;
+                    };
+                    dst.copy_from_slice(src);
+                    continue;
+                }
                 for x in 0..n {
                     let (Some(&a), Some(&b)) = (a_row.get(x), b_row.get(x)) else {
                         continue;

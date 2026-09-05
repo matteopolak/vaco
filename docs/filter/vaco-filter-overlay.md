@@ -87,6 +87,10 @@ not `178`. Per-component (`c0`..`c3`) modes and `opacity` are generic
 over every mode above: `out = floor(a + opacity*(mode(a,b)-a))`, measured
 directly against `multiply` at `opacity=0.5`.
 
+`normal` is the exact identity on the first input for every opacity value, so
+its frame walk copies each valid source-row span rather than evaluating a
+per-sample mode branch. Other modes retain the measured arithmetic path.
+
 **Not implemented**: `hardlight`, `overlay`, `softlight`, `hardmix`,
 `linearlight`, `vividlight`, `pinlight`, `reflect`, `phoenix`,
 `extremity`, `freeze`, `glow`, `heat`, `softdifference`, `geometric`,

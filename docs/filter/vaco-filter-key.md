@@ -86,6 +86,13 @@ blend probes came out one ULP off this crate's `f64` computation of the
 documented formula (`colorhold.rs`'s doc has both cases) — shipped as
 measured, with the mismatch stated rather than rounded away to hide it.
 
+`colorkey` keeps one reusable RGB row while it writes alpha. The filter never
+changes RGB, so retaining a whole-frame nested RGB snapshot only increased
+allocation and cache traffic; the row is read before its alpha row is borrowed
+mutably. Preserve that borrow boundary if adding a packed or planar fast path:
+the existing reference-pinned distance/ramp calculation and its truncation rule
+must remain the sole source of alpha values.
+
 ### The masked-family pickers: each pinned down with 3–7 probes
 
 - `maskedmax(source, f1, f2)` = whichever of `f1`/`f2` is **farther**

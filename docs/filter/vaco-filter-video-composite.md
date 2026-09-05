@@ -48,6 +48,11 @@ its own, possibly chroma-decimated, resolution) and per-pixel for packed ones
 so the byte stride is read off `vaco-pixfmt`'s component table rather than
 hand-derived per format.
 
+When the resolved format has no alpha channel, the equation reduces exactly to
+the foreground sample. `blend` therefore copies the clipped span in each
+packed or planar plane; retain that fast path only for alpha-free formats, as
+the alpha-bearing path must keep its snapshots and floating-point formula.
+
 ### `overlay` reformats through `vaco-scale`, never hand-derives a colour matrix
 
 Main and secondary frames are converted to the resolved blend `PixFmt` (see
