@@ -52,11 +52,21 @@ each packet as one 1,024-sample frame with the matching channel count. Silence
 has no lossy-quality claim to compare — these checks establish framing and
 stream shape, not general quantisation quality.
 
-This is a direct API only, intentionally not a registered generic encoder and
-not a container-ready raw AAC access-unit writer: its packets include ADTS
-headers so they can form a playable elementary stream on concatenation. Full
-AAC-LC encoding still needs transform, quantisation, rate control,
-psychoacoustics, channel tools, and container integration.
+`AacLcSilenceAccessUnit::from_frame` is the separate mux-facing boundary. It
+returns the unframed `raw_data_block()` bytes and the exact two-byte AAC-LC
+`AudioSpecificConfig`: `11 88` for mono and `11 90` for stereo. A container
+writer must attach that config as AAC extradata and use the raw payload as its
+packet body; it must not place ADTS bytes in such a container. The existing
+`AacLcSilenceEncoder` delegates to this raw builder and only adds ADTS, so it
+remains useful for playable elementary streams. The stereo raw API test wraps
+three returned raw payloads only for the independent ADTS oracle: `ffprobe`
+reports AAC/48 kHz/2 channels and `ffmpeg` emits exactly 24,576 zero `f32le`
+bytes; Vaco also decodes the raw payload directly after `11 90` is set as
+extradata.
+
+Both are direct APIs only, intentionally not registered generic encoders or
+container integrations. Full AAC-LC encoding still needs transform,
+quantisation, rate control, psychoacoustics, channel tools, and mux wiring.
 
 **#446 (SBR/HE-AAC) is in progress, not landed.** This pass built and
 verified the QMF analysis/synthesis filterbanks (`qmf.rs`) and all ten
@@ -899,13 +909,13 @@ plausible-looking implementation that a real bitstream falsifies.
 
 ## How to change it
 
-- **Extending AAC-LC encode beyond silence:** start by separating the ADTS
-  transport wrapper in `encoder.rs` from raw access-unit production, then add
-  a real transform/quantisation path before accepting nonzero PCM. Keep the
-  ffmpeg elementary-stream oracle and add an independently generated,
-  non-silent reference for every new channel/rate/frame shape. Do not register
-  the encoder or feed its ADTS-bearing packets to a container muxer until the
-  raw-access-unit/extradata contract is implemented.
+- **Extending AAC-LC encode beyond silence:** preserve
+  `AacLcSilenceAccessUnit` as the raw-payload/`AudioSpecificConfig` source of
+  truth, then add a real transform/quantisation path before accepting nonzero
+  PCM. Keep the ffmpeg elementary-stream oracle and add an independently
+  generated, non-silent reference for every new channel/rate/frame shape. Do
+  not register either direct API until a generic encoder and concrete muxer
+  hand-off own timestamps, stream parameters, and framing together.
 - **Fixing intensity stereo's phase:** thread `sfb_cb`'s actual value (14
   vs 15) from `section.rs`/`scalefactor.rs` through to `IcsStream`, then
   have `reconstruct::apply_intensity_stereo` branch on it instead of always
@@ -970,6 +980,11 @@ gating feature,
 `vaco-registry`/`cargo xtask gen-registry`/`cargo xtask patent-gate` — see
 "Why this is gated" above.
 
+`AacLcSilenceAccessUnit` has the same input contract. Its `payload()` and
+`audio_specific_config()` are paired: use both or neither. It does not create
+stream parameters, timestamps, packet buffers, container framing, or a generic
+encoder descriptor.
+
 ## Dependencies
 
 `vaco-core`, `vaco-bitstream`, `vaco-limits`, `vaco-codec-core` (the
@@ -1003,7 +1018,8 @@ Added by #449 (narrow ADTS silence encode): ISO/IEC 14496-3 subpart 1 Table
 1.A.5 (ADTS fixed/variable header fields) and subpart 4 Table 4.3
 (`raw_data_block()` element sequence) and Table 4.50
 (`individual_channel_stream()`) — `encoder.rs` writes only the mono-SCE or
-stereo-CPE `ZERO_HCB` forms documented above.
+stereo-CPE `ZERO_HCB` forms documented above. The raw API also writes the
+matching `AudioSpecificConfig` from subpart 1 §1.6.2.1/Table 1.15.
 
 Added by #445 (reconstruction): §4.6.1.3 (inverse quantisation),
 §4.6.2.3.3 (scalefactor gain), §4.5.2.3.5 (`quant_to_spec()`), §4.6.8.1.3

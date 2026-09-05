@@ -18,9 +18,10 @@
 //! quantisation, stereo tools, TNS, IMDCT, windowing, and overlap-add.
 //! Unsupported channel configurations and coupling elements are refused by
 //! name rather than approximated.
-//! [`AacLcSilenceEncoder`] additionally writes a deliberately constrained
-//! self-contained ADTS stream for exact silent mono 48 kHz frames; it is not
-//! registered as a general AAC encoder.
+//! [`AacLcSilenceAccessUnit`] writes a deliberately constrained raw AAC-LC
+//! payload and its out-of-band configuration for exact silent mono or stereo
+//! 48 kHz frames. [`AacLcSilenceEncoder`] only adds ADTS framing to that payload;
+//! neither is registered as a general AAC encoder.
 //!
 //! See `docs/codec/vaco-codec-aac.md` for supported configurations, measured
 //! reconstruction quality, and remaining refusal boundaries.
@@ -48,7 +49,7 @@ mod tns_apply;
 
 pub use config::{ChannelResolution, DecoderConfig};
 pub use decoder::AacDecoder;
-pub use encoder::AacLcSilenceEncoder;
+pub use encoder::{AacLcSilenceAccessUnit, AacLcSilenceEncoder};
 pub use pce::{ChannelElementRef, ProgramConfigElement, find_leading_program_config_element};
 
 /// The registry descriptor for this crate's decoder.
