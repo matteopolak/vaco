@@ -383,8 +383,8 @@ fn parse_cpu_list(value: &str) -> Result<BTreeSet<u32>, String> {
         let (start, end) = if let Some((start, end)) = component.split_once('-') {
             (parse_cpu(start)?, parse_cpu(end)?)
         } else {
-                let cpu = parse_cpu(component)?;
-                (cpu, cpu)
+            let cpu = parse_cpu(component)?;
+            (cpu, cpu)
         };
         if start > end {
             return Err(format!("invalid descending CPU range {component:?}"));
@@ -413,7 +413,10 @@ fn render_cpus(cpus: &BTreeSet<u32>) -> String {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "test fixture setup uses direct diagnostics")]
+#[expect(
+    clippy::expect_used,
+    reason = "test fixture setup uses direct diagnostics"
+)]
 mod tests {
     use super::{parse_cpu_list, verify_linux_root};
     use std::fs;
