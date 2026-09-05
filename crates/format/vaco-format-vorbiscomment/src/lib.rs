@@ -3,7 +3,7 @@
 //! Vorbis, FLAC and Opus all carry the same vendor-plus-tag-list metadata
 //! shape (Xiph Vorbis I §5.2; FLAC's `VORBIS_COMMENT` block states it is
 //! exactly that shape "without the framing bit"). This crate is the one
-//! place `#274`'s Vorbis/FLAC header work and `#540`'s own scope overlap —
+//! place where Vorbis/FLAC header parsing and metadata tag parsing meet —
 //! deliberately: parsing the same bit layout twice under two names is
 //! exactly what D19 forbids, so `vaco-parse-audio-misc`'s Vorbis and FLAC
 //! `Parser`s depend on this crate for tag parsing rather than re-deriving it.
