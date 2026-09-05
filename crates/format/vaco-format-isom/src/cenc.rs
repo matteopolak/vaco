@@ -89,6 +89,9 @@ impl TrackEncryption {
     #[must_use]
     pub fn parse(tenc: &IsoBox<'_>) -> Option<Self> {
         let full = tenc.full().ok()?;
+        if full.version > 1 {
+            return None;
+        }
         let mut r = full.reader();
         let _reserved = r.u8();
         let (crypt_byte_block, skip_byte_block) = if full.version >= 1 {
@@ -661,6 +664,14 @@ mod tests {
     fn tenc_rejects_an_unsupported_per_sample_iv_size() {
         let mut body = vec![0, 0, 0, 0, 0, 0, 1, 4];
         // version/flags, two reserved bytes, is_protected, IV size
+        body.extend_from_slice(&[0xAB; 16]);
+        assert!(TrackEncryption::parse(&bx(*b"tenc", &body)).is_none());
+    }
+
+    #[test]
+    fn tenc_rejects_an_unknown_version() {
+        let mut body = vec![2, 0, 0, 0, 0, 0, 1, 8];
+        // version/flags, reserved, pattern, is_protected, IV size
         body.extend_from_slice(&[0xAB; 16]);
         assert!(TrackEncryption::parse(&bx(*b"tenc", &body)).is_none());
     }

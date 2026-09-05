@@ -386,7 +386,8 @@ the reported protected state. This prevents malformed input from acquiring the
 same `encryption_is_protected=1` meaning as the measured fixture.
 Likewise, `default_Per_Sample_IV_Size` accepts only CENC's `0`, `8`, or `16`;
 an unsupported size is rejected before it can be reported or used to locate a
-`senc` IV.
+`senc` IV. `tenc` versions are limited to the defined version-0 and version-1
+layouts, so an unknown version cannot be misread as version 1's pattern fields.
 
 For a `tenc` or `seig` entry with `per_sample_IV_size = 0`, `ConstantIv`
 retains both the declared 8- or 16-byte `constant_IV_size` and the bytes. A
