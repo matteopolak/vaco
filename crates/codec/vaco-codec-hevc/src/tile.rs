@@ -18,6 +18,8 @@ pub struct TileLayout {
     column_boundaries: Vec<u32>,
     row_boundaries: Vec<u32>,
     num_columns: u32,
+    num_rows: u32,
+    ctbs_y: u32,
     loop_filter_across_tiles: bool,
 }
 
@@ -53,6 +55,8 @@ impl TileLayout {
             column_boundaries,
             row_boundaries,
             num_columns: tiles.num_columns,
+            num_rows: tiles.num_rows,
+            ctbs_y,
             loop_filter_across_tiles: tiles.loop_filter_across_tiles,
         })
     }
@@ -64,6 +68,52 @@ impl TileLayout {
         let column = boundary_index(&self.column_boundaries, x)?;
         let row = boundary_index(&self.row_boundaries, y)?;
         row.checked_mul(self.num_columns)?.checked_add(column)
+    }
+
+    /// Return the number of tile-local CABAC substreams in a full picture.
+    ///
+    /// With WPP disabled, one substream covers each tile in tile-scan order;
+    /// its byte range is separated from the next one by an entry-point offset.
+    #[must_use]
+    pub fn tile_substream_count(&self) -> Option<u32> {
+        self.num_columns.checked_mul(self.num_rows)
+    }
+
+    /// Return the full-picture entry-point offset count for this layout.
+    ///
+    /// This is the §7.4.7.1 count for a picture-wide slice: tiles-only uses
+    /// one substream per tile, while tiles plus WPP uses one per tile column
+    /// and CTB row. A slice may carry fewer offsets when it covers less than
+    /// the full picture; this method deliberately does not guess that range.
+    #[must_use]
+    pub fn entry_point_offset_count(&self, wpp: bool) -> Option<u32> {
+        let substreams = if wpp {
+            self.num_columns.checked_mul(self.ctbs_y)?
+        } else {
+            self.tile_substream_count()?
+        };
+        substreams.checked_sub(1)
+    }
+
+    /// Return `(tile_id, tile-local raster CTB address)` for a CTB.
+    ///
+    /// The tile-local address is the address consumed by a tile substream,
+    /// not the picture-raster `CtbAddrInRs`. It resets at every tile edge.
+    #[must_use]
+    pub fn tile_local_ctb_address(&self, x: u32, y: u32) -> Option<(u32, u32)> {
+        let column = boundary_index(&self.column_boundaries, x)?;
+        let row = boundary_index(&self.row_boundaries, y)?;
+        let column_index = usize::try_from(column).ok()?;
+        let row_index = usize::try_from(row).ok()?;
+        let column_start = *self.column_boundaries.get(column_index)?;
+        let row_start = *self.row_boundaries.get(row_index)?;
+        let column_end = *self.column_boundaries.get(column_index.checked_add(1)?)?;
+        let local_x = x.checked_sub(column_start)?;
+        let local_y = y.checked_sub(row_start)?;
+        let width = column_end.checked_sub(column_start)?;
+        let local_address = local_y.checked_mul(width)?.checked_add(local_x)?;
+        let tile_id = row.checked_mul(self.num_columns)?.checked_add(column)?;
+        Some((tile_id, local_address))
     }
 
     /// Whether two CTBs share one tile, with out-of-picture coordinates
