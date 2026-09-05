@@ -135,9 +135,10 @@ via [`DecoderConfig::try_resolve_pending`].
 
 The decoder also keeps a PCE's native output layout when its element order
 already matches output plane order: front-centre mono, front stereo, and a
-front `CPE` plus one `LFE` (`2.1`). More complex PCEs retain their exact
-channel count but remain layout-unspecified until their required plane
-permutation is implemented and verified.
+front `CPE` plus one `LFE` (`2.1`), or a front `CPE` plus back `CPE`
+(`quad`). More complex PCEs retain their exact channel count but remain
+layout-unspecified until their required plane permutation is implemented and
+verified.
 
 For raw ADTS, that PCE is normally present only in the first packet. Once a
 leading PCE resolves a configuration, the decoder retains it for later ADTS
@@ -526,7 +527,7 @@ This invariant was re-checked (still 677/677) after #445's M/S-mask-storage
 refactor changed how `raw_data_block.rs` represents `Element::Pair`,
 confirming that change did not silently desync the parse.
 
-### PCE persistence: exact output count against `ffmpeg`
+### PCE persistence and layouts: exact output count against `ffmpeg`
 
 `ffmpeg` 9.0.1 generated a 1.024-second, 48 kHz, three-channel AAC-LC ADTS
 fixture from three distinct sine channels. Its ADTS header declares
@@ -545,6 +546,13 @@ For that PCE's front-`CPE` plus `LFE` shape, Vaco now emits a native `2.1`
 frame layout (mask `0x0b`) as well as the exact three-plane/sample count. This
 matches `ffprobe`'s layout label without pretending that every PCE can use the
 same plane order.
+
+An independently generated 1.024-second, 48 kHz `quad` ADTS fixture exercised
+the front-`CPE` plus back-`CPE` PCE shape. `ffprobe` reported 48 packets and a
+`quad` layout; both decoders emitted **786,432 bytes** (48 packets × 1024
+samples × 4 channels × 4 bytes/sample). That shape now emits the native `quad`
+frame layout (mask `0x33`), whose ascending plane order is already the PCE's
+front-pair, back-pair order.
 
 ### Reconstruction: correlation/max_abs/rms against `ffmpeg -bitexact`
 

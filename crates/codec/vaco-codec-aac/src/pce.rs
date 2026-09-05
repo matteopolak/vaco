@@ -92,16 +92,29 @@ impl ProgramConfigElement {
     /// a layout whose ordering the decoder has not established.
     #[must_use]
     pub fn known_output_layout(&self) -> Option<ChannelLayout> {
-        if !self.side.is_empty() || !self.back.is_empty() {
-            return None;
-        }
-        match (self.front.as_slice(), self.lfe.as_slice()) {
-            ([ChannelElementRef { is_cpe: false, .. }], []) => Some(ChannelLayout::MONO),
-            ([ChannelElementRef { is_cpe: true, .. }], []) => Some(ChannelLayout::STEREO),
-            ([ChannelElementRef { is_cpe: true, .. }], [_]) => ChannelLayout::custom([
+        match (
+            self.front.as_slice(),
+            self.side.as_slice(),
+            self.back.as_slice(),
+            self.lfe.as_slice(),
+        ) {
+            ([ChannelElementRef { is_cpe: false, .. }], [], [], []) => Some(ChannelLayout::MONO),
+            ([ChannelElementRef { is_cpe: true, .. }], [], [], []) => Some(ChannelLayout::STEREO),
+            ([ChannelElementRef { is_cpe: true, .. }], [], [], [_]) => ChannelLayout::custom([
                 Channel::FrontLeft,
                 Channel::FrontRight,
                 Channel::LowFrequency,
+            ]),
+            (
+                [ChannelElementRef { is_cpe: true, .. }],
+                [],
+                [ChannelElementRef { is_cpe: true, .. }],
+                [],
+            ) => ChannelLayout::custom([
+                Channel::FrontLeft,
+                Channel::FrontRight,
+                Channel::BackLeft,
+                Channel::BackRight,
             ]),
             _ => None,
         }
@@ -359,6 +372,32 @@ mod tests {
         assert_eq!(
             pce.known_output_layout().map(|layout| layout.mask()),
             Some(0xb)
+        );
+    }
+
+    #[test]
+    fn a_front_pair_with_back_pair_has_the_quad_output_layout() {
+        let pce = ProgramConfigElement {
+            element_instance_tag: 0,
+            object_type: AudioObjectType::AAC_LC,
+            sampling_frequency_index: 3,
+            front: vec![ChannelElementRef {
+                is_cpe: true,
+                tag: 0,
+            }],
+            side: Vec::new(),
+            back: vec![ChannelElementRef {
+                is_cpe: true,
+                tag: 1,
+            }],
+            lfe: Vec::new(),
+            mono_mixdown_element_number: None,
+            stereo_mixdown_element_number: None,
+            matrix_mixdown: None,
+        };
+        assert_eq!(
+            pce.known_output_layout().map(|layout| layout.mask()),
+            Some(0x33)
         );
     }
 
