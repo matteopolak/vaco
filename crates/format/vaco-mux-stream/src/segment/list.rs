@@ -17,15 +17,16 @@
 //! writes parses back with [`crate::concat::script::parse`].
 
 use core::fmt::Write as _;
+use vaco_core::Duration;
 
 /// One completed segment, everything a list line needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SegmentRecord {
     pub filename: String,
-    /// Seconds from the start of the whole file.
-    pub start_time: f64,
-    /// Seconds, this segment's own span.
-    pub duration: f64,
+    /// Exact time from the start of the whole file.
+    pub start_time: Duration,
+    /// This segment's exact span.
+    pub duration: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -73,10 +74,13 @@ pub fn render(kind: SegmentListType, records: &[SegmentRecord], finished: bool) 
             for r in records {
                 let _ = writeln!(
                     out,
-                    "{},{:.6},{:.6}",
+                    "{},{},{}",
                     r.filename,
-                    r.start_time,
-                    r.start_time + r.duration
+                    format_decimal_seconds(r.start_time, 6),
+                    r.start_time.checked_add(r.duration).map_or_else(
+                        || format_decimal_seconds(r.start_time, 6),
+                        |end| { format_decimal_seconds(end, 6) }
+                    )
                 );
             }
             out
@@ -84,7 +88,12 @@ pub fn render(kind: SegmentListType, records: &[SegmentRecord], finished: bool) 
         SegmentListType::Ext => {
             let mut out = String::new();
             for r in records {
-                let _ = writeln!(out, "{},{:.6}", r.filename, r.duration);
+                let _ = writeln!(
+                    out,
+                    "{},{}",
+                    r.filename,
+                    format_decimal_seconds(r.duration, 6)
+                );
             }
             out
         }
@@ -96,7 +105,7 @@ pub fn render(kind: SegmentListType, records: &[SegmentRecord], finished: bool) 
 fn render_m3u8(records: &[SegmentRecord], finished: bool) -> String {
     let target = records
         .iter()
-        .map(|r| r.duration.ceil() as u64)
+        .map(|r| ceil_seconds(r.duration))
         .max()
         .unwrap_or(0);
     let mut out = String::new();
@@ -105,7 +114,7 @@ fn render_m3u8(records: &[SegmentRecord], finished: bool) -> String {
     let _ = writeln!(out, "#EXT-X-TARGETDURATION:{target}");
     out.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
     for r in records {
-        let _ = writeln!(out, "#EXTINF:{:.6},", r.duration);
+        let _ = writeln!(out, "#EXTINF:{},", format_decimal_seconds(r.duration, 6));
         out.push_str(&r.filename);
         out.push('\n');
     }
@@ -141,9 +150,70 @@ fn render_ffconcat(records: &[SegmentRecord]) -> String {
         out.push_str("file ");
         out.push_str(&quote_concat_path(&r.filename));
         out.push('\n');
-        let _ = writeln!(out, "duration {:.6}", r.duration);
+        let _ = writeln!(out, "duration {}", format_decimal_seconds(r.duration, 6));
     }
     out
+}
+
+fn ceil_seconds(duration: Duration) -> u64 {
+    let (numerator, denominator) = duration.as_ratio();
+    if numerator <= 0 {
+        return 0;
+    }
+    let whole = numerator.div_euclid(denominator);
+    let rounded = whole.saturating_add(i128::from(numerator.rem_euclid(denominator) != 0));
+    u64::try_from(rounded).unwrap_or(u64::MAX)
+}
+
+/// Render an exact duration as a decimal field without binary floating point.
+#[allow(
+    clippy::integer_division,
+    reason = "decimal rendering intentionally rounds the exact ratio at its text boundary"
+)]
+fn format_decimal_seconds(duration: Duration, minimum_fractional_digits: usize) -> String {
+    const MAX_FRACTIONAL_DIGITS: usize = 15;
+
+    let (numerator, denominator) = duration.as_ratio();
+    let negative = numerator < 0;
+    let numerator = numerator.unsigned_abs();
+    let denominator = denominator as u128;
+    let mut whole = numerator / denominator;
+    let remainder = numerator % denominator;
+    let mut scale = 1_u128;
+    let mut fractional_digits = 0;
+    while fractional_digits < MAX_FRACTIONAL_DIGITS {
+        let Some(next_scale) = scale.checked_mul(10) else {
+            break;
+        };
+        if remainder.checked_mul(next_scale).is_none() {
+            break;
+        }
+        scale = next_scale;
+        fractional_digits += 1;
+    }
+    let scaled = remainder * scale;
+    let mut fraction = scaled / denominator;
+    let discarded = scaled % denominator;
+    if discarded >= denominator - discarded {
+        fraction = fraction.saturating_add(1);
+    }
+    if fraction == scale {
+        whole = whole.saturating_add(1);
+        fraction = 0;
+    }
+
+    let mut digits = if fractional_digits == 0 {
+        String::new()
+    } else {
+        format!("{fraction:0fractional_digits$}")
+    };
+    while digits.len() > minimum_fractional_digits && digits.ends_with('0') {
+        digits.pop();
+    }
+    while digits.len() < minimum_fractional_digits {
+        digits.push('0');
+    }
+    format!("{}{whole}.{digits}", if negative { "-" } else { "" })
 }
 
 #[cfg(test)]
@@ -156,13 +226,13 @@ mod tests {
         vec![
             SegmentRecord {
                 filename: "out0.ts".to_owned(),
-                start_time: 0.0,
-                duration: 2.0,
+                start_time: Duration::ZERO,
+                duration: Duration::from_micros(2_000_000),
             },
             SegmentRecord {
                 filename: "out1.ts".to_owned(),
-                start_time: 2.0,
-                duration: 1.5,
+                start_time: Duration::from_micros(2_000_000),
+                duration: Duration::from_micros(1_500_000),
             },
         ]
     }
@@ -191,6 +261,55 @@ mod tests {
     }
 
     #[test]
+    fn m3u8_keeps_decimal_digits_beyond_microseconds() {
+        let records = vec![
+            SegmentRecord {
+                filename: "tiny.ts".to_owned(),
+                start_time: Duration::ZERO,
+                duration: Duration::from_fraction(7, 1_000_000_000).unwrap(),
+            },
+            SegmentRecord {
+                filename: "clock.ts".to_owned(),
+                start_time: Duration::from_fraction(7, 1_000_000_000).unwrap(),
+                duration: Duration::from_fraction(1, 28_224_000).unwrap(),
+            },
+        ];
+        let out = render(SegmentListType::M3u8, &records, true);
+        assert!(
+            out.contains("#EXTINF:0.000000007,\ntiny.ts\n"),
+            "submicrosecond duration was rounded away:\n{out}"
+        );
+        assert!(
+            out.contains("#EXTINF:0.000000035430839,\nclock.ts\n"),
+            "awkward time-base denominator passed through a binary float:\n{out}"
+        );
+    }
+
+    #[test]
+    fn decimal_list_types_preserve_a_submicrosecond_segment_span() {
+        let records = vec![SegmentRecord {
+            filename: "tiny.ts".to_owned(),
+            start_time: Duration::ZERO,
+            duration: Duration::from_fraction(7, 1_000_000_000).unwrap(),
+        }];
+
+        assert_eq!(
+            render(SegmentListType::Csv, &records, true),
+            "tiny.ts,0.000000,0.000000007\n"
+        );
+        assert_eq!(
+            render(SegmentListType::Ext, &records, true),
+            "tiny.ts,0.000000007\n"
+        );
+        let ffconcat = render(SegmentListType::Ffconcat, &records, true);
+        let parsed = script::parse(&ffconcat, true).unwrap();
+        assert!(parsed.lines.iter().any(|line| {
+            line.directive
+                == script::Directive::Duration(Duration::from_fraction(7, 1_000_000_000).unwrap())
+        }));
+    }
+
+    #[test]
     fn ffconcat_list_round_trips_through_the_concat_parser() {
         let out = render(SegmentListType::Ffconcat, &records(), true);
         let parsed = script::parse(&out, true).unwrap();
@@ -209,8 +328,8 @@ mod tests {
     fn ffconcat_list_round_trips_a_filename_with_an_embedded_quote() {
         let records = vec![SegmentRecord {
             filename: "out's segment.ts".to_owned(),
-            start_time: 0.0,
-            duration: 2.0,
+            start_time: Duration::ZERO,
+            duration: Duration::from_micros(2_000_000),
         }];
         let out = render(SegmentListType::Ffconcat, &records, true);
         let parsed = script::parse(&out, true).unwrap();

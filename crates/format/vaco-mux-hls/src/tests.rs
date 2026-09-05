@@ -43,6 +43,63 @@ fn renders_a_minimal_vod_playlist() {
 }
 
 #[test]
+fn media_playlist_retains_submicrosecond_decimal_segment_duration() {
+    let mut m = bare_muxer(HlsMuxOptions::default());
+    m.written.push_back(WrittenSegment {
+        uri: "tiny.ts".to_owned(),
+        duration: Duration::from_fraction(7, 1_000_000_000).unwrap(),
+        byte_range: None,
+        program_date_time: None,
+    });
+    m.written.push_back(WrittenSegment {
+        uri: "clock.ts".to_owned(),
+        duration: Duration::from_fraction(1, 28_224_000).unwrap(),
+        byte_range: None,
+        program_date_time: None,
+    });
+
+    let text = m.render_media_playlist();
+    assert!(
+        text.contains("#EXTINF:0.000000007,\ntiny.ts\n"),
+        "submicrosecond duration was rounded away:\n{text}"
+    );
+    assert!(
+        text.contains("#EXTINF:0.000000035430839,\nclock.ts\n"),
+        "awkward time-base denominator passed through a binary float:\n{text}"
+    );
+    let parsed = vaco_demux_hls::media::parse(&text, "out/stream.m3u8").unwrap();
+    assert_eq!(
+        parsed
+            .segments
+            .first()
+            .map(|segment| segment.duration.as_ratio()),
+        Some((7, 1_000_000_000)),
+        "the HLS reader must retain the finite decimal we emitted"
+    );
+}
+
+#[test]
+fn finishing_a_segment_keeps_the_reference_packets_exact_duration() {
+    let mut m = bare_muxer(HlsMuxOptions::default());
+    m.current = Some(CurrentSegment {
+        uri: "tiny.ts".to_owned(),
+        time_base: Some(Rational::new(1, 1_000_000_000)),
+        start_dts: Some(0),
+        program_date_time: None,
+        byte_start: 0,
+        file_muxer: None,
+    });
+    m.last_ref_dts = Some(0);
+    m.last_ref_duration = Duration::from_fraction(7, 1_000_000_000).unwrap();
+
+    m.finish_current_segment().unwrap();
+    assert_eq!(
+        m.written.front().map(|segment| segment.duration.as_ratio()),
+        Some((7, 1_000_000_000))
+    );
+}
+
+#[test]
 fn byte_ranges_bump_the_version_and_are_written_before_extinf() {
     let mut m = bare_muxer(HlsMuxOptions::default());
     m.written.push_back(WrittenSegment {

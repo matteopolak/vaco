@@ -31,6 +31,14 @@ and opened a gap at the front of the file — caught by
 `single_file_segments_are_contiguous_non_overlapping_byte_ranges` in
 `tests/roundtrip.rs`, and worth remembering if this code is touched again.
 
+Segment timing stays as `vaco_core::Duration`'s exact rational value through
+the final packet's duration and target-duration ceiling. `#EXTINF` is the
+intentional presentation boundary: it is rendered with decimal integer
+arithmetic (at least three and up to fifteen fractional digits), never via a
+microsecond or `f64` intermediate. A repeating source time base is therefore
+rounded only when it must become HLS decimal text, rather than being truncated
+before playlist generation.
+
 ### The registered entry point cannot really mux HLS
 
 `MuxerDesc::open`'s frozen signature is one sink, no filename, no protocol

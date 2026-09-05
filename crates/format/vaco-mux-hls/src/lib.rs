@@ -194,7 +194,7 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
         single_file_handle: None,
         single_file_url: None,
         last_ref_dts: None,
-        last_ref_duration_us: 0,
+        last_ref_duration: Duration::ZERO,
     }))
 }
 
@@ -253,7 +253,7 @@ pub struct HlsMuxer {
     single_file_url: Option<String>,
     last_ref_dts: Option<i64>,
     /// The most recent *non-zero* reference-stream packet duration, in
-    /// microseconds (`Packet::duration`'s own unit, independent of any
+    /// exact seconds (`Packet::duration`'s own unit, independent of any
     /// stream time base — see `vaco_core::Duration`'s doc). `EXTINF` used to
     /// be derived from `last_ref_dts - start_dts` alone — the span *to* the
     /// last packet's own timestamp rather than *through* it — so every
@@ -266,7 +266,7 @@ pub struct HlsMuxer {
     /// duration at all still gets a real value, then kept current from the
     /// last packet that did — mirrors `vaco-mux-avi`'s
     /// `last_video_duration_ticks`.
-    last_ref_duration_us: u64,
+    last_ref_duration: Duration,
 }
 
 impl core::fmt::Debug for HlsMuxer {
@@ -314,7 +314,7 @@ impl HlsMuxer {
             single_file_handle: None,
             single_file_url: None,
             last_ref_dts: None,
-            last_ref_duration_us: 0,
+            last_ref_duration: Duration::ZERO,
         }
     }
 
@@ -380,15 +380,12 @@ impl HlsMuxer {
             3
         };
 
-        let target = self
+        let target_secs = self
             .written
             .iter()
-            .map(|s| s.duration.as_micros())
+            .map(|s| ceil_seconds(s.duration))
             .max()
-            .unwrap_or((self.opts.hls_time * 1_000_000.0) as i64);
-        let target_secs = u64::try_from(target.max(0))
-            .unwrap_or(0)
-            .div_ceil(1_000_000)
+            .unwrap_or_else(|| self.opts.hls_time.ceil() as u64)
             .max(1);
 
         let mut out = String::new();
@@ -420,8 +417,7 @@ impl HlsMuxer {
             if let Some(range) = seg.byte_range {
                 let _ = writeln!(out, "#EXT-X-BYTERANGE:{}@{}", range.length, range.offset);
             }
-            let secs = seg.duration.as_micros() as f64 / 1_000_000.0;
-            let _ = writeln!(out, "#EXTINF:{secs:.3},");
+            let _ = writeln!(out, "#EXTINF:{},", format_decimal_seconds(seg.duration, 3));
             out.push_str(&seg.uri);
             out.push('\n');
         }
@@ -560,18 +556,19 @@ impl HlsMuxer {
         let Some(seg) = self.current.take() else {
             return Ok(());
         };
-        let duration_us = match (seg.time_base, seg.start_dts, self.last_ref_dts) {
+        let duration = match (seg.time_base, seg.start_dts, self.last_ref_dts) {
             (Some(tb), Some(start), Some(last)) => {
-                let start_us = Timestamp::new(start)
+                let start = Timestamp::new(start)
                     .to_duration(tb)
-                    .map_or(0, Duration::as_micros);
-                let last_us = Timestamp::new(last)
+                    .unwrap_or(Duration::ZERO);
+                let last = Timestamp::new(last)
                     .to_duration(tb)
-                    .map_or(0, Duration::as_micros);
-                let extra_us = i64::try_from(self.last_ref_duration_us).unwrap_or(i64::MAX);
-                last_us.saturating_add(extra_us).saturating_sub(start_us)
+                    .unwrap_or(Duration::ZERO);
+                last.checked_add(self.last_ref_duration)
+                    .and_then(|end| end.checked_sub(start))
+                    .ok_or(Error::InvalidData("HLS segment duration overflows"))?
             }
-            _ => 0,
+            _ => Duration::ZERO,
         };
         let byte_range = if self.single_file() {
             let end = self
@@ -590,7 +587,11 @@ impl HlsMuxer {
         }
         self.written.push_back(WrittenSegment {
             uri: seg.uri,
-            duration: Duration::from_micros(duration_us.max(1)),
+            duration: if duration > Duration::ZERO {
+                duration
+            } else {
+                Duration::from_micros(1)
+            },
             byte_range,
             program_date_time: seg.program_date_time,
         });
@@ -638,6 +639,70 @@ fn recover_append_state(write: Option<&WriteAccess>, url: &str) -> (u64, u64) {
     (sequence, sequence.saturating_add(count))
 }
 
+/// Round an exact duration up to the whole seconds the HLS target tag requires.
+fn ceil_seconds(duration: Duration) -> u64 {
+    let (numerator, denominator) = duration.as_ratio();
+    if numerator <= 0 {
+        return 0;
+    }
+    let whole = numerator.div_euclid(denominator);
+    let rounded = whole.saturating_add(i128::from(numerator.rem_euclid(denominator) != 0));
+    u64::try_from(rounded).unwrap_or(u64::MAX)
+}
+
+/// Render an exact segment duration as decimal seconds without a binary-float
+/// intermediate. Fifteen fractional places keep timing finer than the legacy
+/// microsecond spelling while avoiding a needlessly long playlist line.
+#[allow(
+    clippy::integer_division,
+    reason = "decimal rendering intentionally rounds the exact ratio at its text boundary"
+)]
+fn format_decimal_seconds(duration: Duration, minimum_fractional_digits: usize) -> String {
+    const MAX_FRACTIONAL_DIGITS: usize = 15;
+
+    let (numerator, denominator) = duration.as_ratio();
+    let negative = numerator < 0;
+    let numerator = numerator.unsigned_abs();
+    let denominator = denominator as u128;
+    let mut whole = numerator / denominator;
+    let remainder = numerator % denominator;
+    let mut scale = 1_u128;
+    let mut fractional_digits = 0;
+    while fractional_digits < MAX_FRACTIONAL_DIGITS {
+        let Some(next_scale) = scale.checked_mul(10) else {
+            break;
+        };
+        if remainder.checked_mul(next_scale).is_none() {
+            break;
+        }
+        scale = next_scale;
+        fractional_digits += 1;
+    }
+    let scaled = remainder * scale;
+    let mut fraction = scaled / denominator;
+    let discarded = scaled % denominator;
+    if discarded >= denominator - discarded {
+        fraction = fraction.saturating_add(1);
+    }
+    if fraction == scale {
+        whole = whole.saturating_add(1);
+        fraction = 0;
+    }
+
+    let mut digits = if fractional_digits == 0 {
+        String::new()
+    } else {
+        format!("{fraction:0fractional_digits$}")
+    };
+    while digits.len() > minimum_fractional_digits && digits.ends_with('0') {
+        digits.pop();
+    }
+    while digits.len() < minimum_fractional_digits {
+        digits.push('0');
+    }
+    format!("{}{whole}.{digits}", if negative { "-" } else { "" })
+}
+
 impl Muxer for HlsMuxer {
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         if self.header_written {
@@ -673,10 +738,8 @@ impl Muxer for HlsMuxer {
             )
             && num > 0
         {
-            self.last_ref_duration_us = 1_000_000u64
-                .saturating_mul(den)
-                .checked_div(num)
-                .unwrap_or(0);
+            self.last_ref_duration =
+                Duration::from_fraction(i128::from(den), i128::from(num)).unwrap_or(Duration::ZERO);
         }
         if matches!(self.opts.hls_segment_type, HlsSegmentType::Fmp4)
             && let Some(write) = &self.write
@@ -738,9 +801,8 @@ impl Muxer for HlsMuxer {
             self.last_ref_dts = Some(ts);
             // A packet that states no duration leaves the running hint at
             // its last real value — see the field's own doc.
-            let stated_us = packet.duration.as_micros().max(0);
-            if stated_us > 0 {
-                self.last_ref_duration_us = stated_us as u64;
+            if packet.duration > Duration::ZERO {
+                self.last_ref_duration = packet.duration;
             }
         }
         Ok(())

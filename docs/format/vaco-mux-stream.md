@@ -209,6 +209,14 @@ and there is nowhere else to look one up from, since `CodecParameters`
 (all `add_stream` receives) carries no time base at all; only a `Stream`
 does, which this muxer never sees. See `planner`'s module doc.
 
+The segment records themselves retain their start and duration as exact
+`vaco_core::Duration` values. Cut spans and the final `pts + duration` span
+are compared and subtracted as rationals, so a large timestamp cannot erase a
+microsecond segment through `f64` cancellation. List renderers are the one
+decimal-output boundary: they use integer decimal arithmetic with six minimum
+and fifteen maximum fractional digits; no list type converts timing through a
+binary float.
+
 `-segment_list_type`: `flat` (one filename per line), `m3u8`/`hls` (a real
 HLS media playlist — `#EXTM3U`/`#EXT-X-VERSION`/`#EXT-X-TARGETDURATION`/
 `#EXTINF`/`#EXT-X-ENDLIST`, RFC 8216 structure, not ffmpeg-internal), `ext`

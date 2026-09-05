@@ -177,8 +177,8 @@ pub struct SegmentMuxer {
     /// [`SegmentOptions::reset_timestamps`] is set.
     segment_base: HashMap<u32, i64>,
     records: Vec<SegmentRecord>,
-    current_start_seconds: f64,
-    /// The latest `pts + duration` seen on any stream, in seconds —
+    current_start: Duration,
+    /// The latest exact `pts + duration` seen on any stream —
     /// [`Muxer::write_trailer`] has no next packet to measure the final
     /// segment's span against (every mid-stream cut uses the *next*
     /// segment's first reference-stream packet instead), so this is what it
@@ -186,7 +186,7 @@ pub struct SegmentMuxer {
     /// of one 0.1s frame gets `#EXTINF:0.100000,`, matching the file's own
     /// content duration, never the literal `0.000000` this field used to
     /// leave in place.
-    last_seen_end_seconds: f64,
+    last_seen_end: Duration,
     list_sink: Option<Box<dyn MediaSink>>,
     /// Captured from [`Muxer::set_metadata`] and replayed onto every new
     /// segment's inner muxer. Before this field existed there was nowhere to
@@ -243,8 +243,8 @@ impl SegmentMuxer {
             segment_index: 0,
             segment_base: HashMap::new(),
             records: Vec::new(),
-            current_start_seconds: 0.0,
-            last_seen_end_seconds: 0.0,
+            current_start: Duration::ZERO,
+            last_seen_end: Duration::ZERO,
             list_sink: None,
             metadata: MuxMetadata::default(),
             bitexact: false,
@@ -318,8 +318,8 @@ impl SegmentMuxer {
         self.segment_base.clear();
         self.records.push(SegmentRecord {
             filename: name,
-            start_time: self.current_start_seconds,
-            duration: 0.0,
+            start_time: self.current_start,
+            duration: Duration::ZERO,
         });
         self.write_list()?;
         Ok(())
@@ -338,13 +338,16 @@ impl SegmentMuxer {
         Ok(())
     }
 
-    fn close_current(&mut self, elapsed_seconds: f64) -> Result<()> {
+    fn close_current(&mut self, elapsed: Duration) -> Result<()> {
         if let Some(mut inner) = self.current.take() {
             inner.write_trailer()?;
             if let Some(last) = self.records.last_mut() {
-                last.duration = elapsed_seconds;
+                last.duration = elapsed;
             }
-            self.current_start_seconds += elapsed_seconds;
+            self.current_start = self
+                .current_start
+                .checked_add(elapsed)
+                .ok_or(Error::InvalidData("segment duration overflows"))?;
         }
         Ok(())
     }
@@ -403,9 +406,10 @@ impl Muxer for SegmentMuxer {
         // `CodecParameters` does not carry one at all; only a `Stream`,
         // which this muxer never receives, does).
         if let Some(us) = packet.pts.ticks() {
-            let end_seconds =
-                vaco_core::Duration::from_micros(us).as_secs_f64() + packet.duration.as_secs_f64();
-            self.last_seen_end_seconds = self.last_seen_end_seconds.max(end_seconds);
+            let end = Duration::from_micros(us)
+                .checked_add(packet.duration)
+                .ok_or(Error::InvalidData("segment packet end overflows"))?;
+            self.last_seen_end = self.last_seen_end.max(end);
         }
         let is_reference = Some(packet.stream_index) == self.reference_stream;
         if is_reference {
@@ -413,10 +417,14 @@ impl Muxer for SegmentMuxer {
                 .planner
                 .on_reference_packet(packet.pts, packet.is_key());
             if cut {
-                let now_seconds = packet.pts.ticks().map_or(self.current_start_seconds, |us| {
-                    vaco_core::Duration::from_micros(us).as_secs_f64()
-                });
-                let elapsed = (now_seconds - self.current_start_seconds).max(0.0);
+                let now = packet
+                    .pts
+                    .ticks()
+                    .map_or(self.current_start, Duration::from_micros);
+                let elapsed = now
+                    .checked_sub(self.current_start)
+                    .unwrap_or(Duration::ZERO)
+                    .max(Duration::ZERO);
                 self.close_current(elapsed)?;
                 self.open_next_segment()?;
             }
@@ -435,8 +443,12 @@ impl Muxer for SegmentMuxer {
     fn write_trailer(&mut self) -> Result<()> {
         // No next segment's first packet exists to measure the final span
         // against, so fall back to the latest `pts + duration` this muxer has
-        // observed on any stream — see `last_seen_end_seconds`'s own doc.
-        let elapsed = (self.last_seen_end_seconds - self.current_start_seconds).max(0.0);
+        // observed on any stream — see `last_seen_end`'s own doc.
+        let elapsed = self
+            .last_seen_end
+            .checked_sub(self.current_start)
+            .unwrap_or(Duration::ZERO)
+            .max(Duration::ZERO);
         self.close_current(elapsed)?;
         if self.list_sink.is_some() {
             let rendered = self.rendered_list(true);
@@ -746,15 +758,37 @@ mod tests {
         }
         seg.write_trailer().unwrap();
         assert_eq!(seg.records.len(), 2);
-        assert!(
-            (seg.records[0].duration - 2.5).abs() < 1e-9,
-            "segment 1: {:?}",
-            seg.records[0].duration
+        assert_eq!(seg.records[0].duration, Duration::from_micros(2_500_000));
+        assert_eq!(seg.records[1].duration, Duration::from_micros(1_000_000));
+    }
+
+    #[test]
+    fn segment_duration_keeps_a_microsecond_at_large_timestamps() {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let mut seg = SegmentMuxer::new(
+            "out%d.raw",
+            SegmentOptions {
+                segment_time: Duration::from_micros(1),
+                segment_list_type: SegmentListType::M3u8,
+                ..SegmentOptions::default()
+            },
+            counting_factory(opened),
         );
+        seg.add_stream(&params(MediaType::Video)).unwrap();
+        seg.write_header().unwrap();
+
+        let start = 1_i64 << 54;
+        for pts in [start, start + 1, start + 2] {
+            let mut p = packet(0, 0, true);
+            p.pts = Timestamp::new(pts);
+            p.dts = p.pts;
+            seg.write_packet(&p).unwrap();
+        }
+
+        let text = seg.rendered_list(false);
         assert!(
-            (seg.records[1].duration - 1.0).abs() < 1e-9,
-            "segment 2's final duration must reflect its real content span, not 0.0: {:?}",
-            seg.records[1].duration
+            text.contains("#EXTINF:0.000001,\nout1.raw\n"),
+            "the one-microsecond middle segment disappeared at a large PTS:\n{text}"
         );
     }
 
