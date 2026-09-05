@@ -29,21 +29,12 @@
 //!
 //! # Why `FrameData` itself stays a closed enum
 //!
-//! Adding `#[non_exhaustive]` here — sparing every future media type this
-//! same call-site sweep — was considered and rejected. `FrameSideData` is
-//! `#[non_exhaustive]` because its variant set is genuinely open-ended, one
-//! entry per filter family, generated incrementally as codecs and filters
-//! land (its own doc: "generated from the side-data table"). `FrameData` is
-//! the opposite: it partitions *what kind of decoded output a `Frame` is*,
-//! which is closed by the model itself — a decoder hands back a picture, a
-//! block of samples, or a subtitle event, and the reference's own
-//! `AVMediaType` enumerates exactly that same small, stable set for
-//! anything that can be decoded into a frame (data/attachment streams are
-//! never decoded to begin with, so they never reach this type). A
-//! `#[non_exhaustive]` `FrameData` would force a wildcard arm onto every
-//! site this pass just gave an explicit one — trading twelve honest arms
-//! today for silent pass-through at every one of them against a media type
-//! that, on the reference's own evidence, is not coming.
+//! `FrameSideData` is `#[non_exhaustive]` because its variants are open-ended,
+//! generated incrementally per filter family. `FrameData` instead partitions
+//! decoded frame output into a picture, a sample block, or a subtitle event.
+//! The reference's `AVMediaType` enumerates that same stable set; data and
+//! attachment streams are not decoded into this type. Keeping the enum closed
+//! makes callers handle every supported media type explicitly.
 use vaco_limits::Budget;
 use vaco_pool::Buffer;
 
