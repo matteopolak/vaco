@@ -426,6 +426,27 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         )
         .expect("first tile third PU carries rem-mode syntax");
     assert_eq!(first_third_rem_mode, 22);
+    let first_third_luma_mode = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .resolve_first_ctb_leaf_third_luma_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile third PU rem-mode resolves to a luma mode");
+    assert_eq!(first_third_luma_mode, 24);
+    let second_third_luma_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .resolve_first_ctb_leaf_third_luma_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no measured third PU rem-mode");
+    assert!(matches!(
+        second_third_luma_error,
+        Error::Unsupported("vaco-codec-hevc: first tile third PU rem-mode is not the measured value")
+    ));
     let second_third_rem_error = tile_states
         .get_mut(1)
         .expect("second tile state exists")

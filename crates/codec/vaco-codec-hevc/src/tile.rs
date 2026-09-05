@@ -47,6 +47,7 @@ pub struct TileCabacState<'a> {
     first_ctb_leaf_second_luma_mode: Option<u8>,
     first_ctb_leaf_third_prev_intra: Option<bool>,
     first_ctb_leaf_third_rem_mode: Option<u8>,
+    first_ctb_leaf_third_luma_mode: Option<u8>,
 }
 
 impl TileCabacState<'_> {
@@ -591,6 +592,44 @@ impl TileCabacState<'_> {
         self.first_ctb_leaf_third_rem_mode = Some(rem_mode);
         Ok(rem_mode)
     }
+
+    /// Resolve the third PU's measured rem-mode value to its luma mode.
+    ///
+    /// The third PU is at the first CTB's left edge, so its unavailable left
+    /// neighbour substitutes `INTRA_DC`; its above neighbour is the first
+    /// PU's established `INTRA_DC`. Section 8.4.2 therefore derives
+    /// `[PLANAR, DC, VER]` and maps this fixture's rem-mode value 22 to mode
+    /// 24. The following PU's syntax remains unconsumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] unless the measured rem-mode
+    /// and first-PU luma mode are established, and
+    /// [`vaco_core::Error::InvalidData`] for inconsistent leaf dimensions.
+    pub fn resolve_first_ctb_leaf_third_luma_mode(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<u8> {
+        if self.first_ctb_leaf_third_rem_mode != Some(22)
+            || self.first_ctb_leaf_luma_mode != Some(crate::intra_mode::DC_IDX)
+        {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile third PU rem-mode is not the measured value",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        let mode = crate::intra_mode::resolve_rem_mode(
+            22,
+            crate::intra_mode::mpm_list(crate::intra_mode::DC_IDX, crate::intra_mode::DC_IDX),
+        );
+        self.first_ctb_leaf_third_luma_mode = Some(mode);
+        Ok(mode)
+    }
 }
 
 impl TileLayout {
@@ -868,6 +907,7 @@ impl TileLayout {
                 first_ctb_leaf_second_luma_mode: None,
                 first_ctb_leaf_third_prev_intra: None,
                 first_ctb_leaf_third_rem_mode: None,
+                first_ctb_leaf_third_luma_mode: None,
             });
         }
         Ok(states)
