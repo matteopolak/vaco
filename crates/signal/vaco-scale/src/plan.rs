@@ -677,7 +677,10 @@ mod tests {
         let PlanKind::General(g) = &p.kind else {
             panic!("expected a general plan");
         };
-        assert!(matches!(g.colour, ColorStage::Affine(_)));
+        assert!(matches!(
+            g.colour,
+            ColorStage::Affine(_) | ColorStage::Float(_)
+        ));
         assert_eq!(g.ch[1].mid, (64, 64));
         assert_eq!(g.ch[1].dst, (32, 32));
         assert!(!g.ch[1].down.is_identity());

@@ -15,7 +15,9 @@
 //! The `yuvj*` rule is load-bearing: those formats *are* full range by
 //! definition, and treating one as limited scales every value by 255/219.
 
-use vaco_color::{ColorInfo, ColorRange, MatrixCoefficients};
+use vaco_color::{
+    ColorInfo, ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic,
+};
 use vaco_pixfmt::{PixFmt, PixFmtFlags};
 
 use crate::colour::Space;
@@ -100,6 +102,44 @@ impl ImageSpec {
         }
     }
 
+    /// The primary set after resolving omitted signalling from the matrix.
+    #[must_use]
+    pub fn effective_primaries(&self) -> ColorPrimaries {
+        if !matches!(self.color.primaries, ColorPrimaries::Unspecified) {
+            return self.color.primaries;
+        }
+        if matches!(self.space(), Space::Rgb)
+            && matches!(self.color.matrix, MatrixCoefficients::Unspecified)
+        {
+            return ColorPrimaries::Bt709;
+        }
+        match self.effective_matrix() {
+            MatrixCoefficients::Bt2020Ncl | MatrixCoefficients::Bt2020Cl => ColorPrimaries::Bt2020,
+            MatrixCoefficients::Bt470bg => ColorPrimaries::Bt470bg,
+            MatrixCoefficients::Smpte170m => ColorPrimaries::Smpte170m,
+            MatrixCoefficients::Smpte240m => ColorPrimaries::Smpte240m,
+            _ => ColorPrimaries::Bt709,
+        }
+    }
+
+    /// The transfer characteristic after resolving omitted signalling from the
+    /// resolved primary set.
+    #[must_use]
+    pub fn effective_transfer(&self) -> TransferCharacteristic {
+        if !matches!(self.color.transfer, TransferCharacteristic::Unspecified) {
+            return self.color.transfer;
+        }
+        match self.effective_primaries() {
+            ColorPrimaries::Bt470m => TransferCharacteristic::Gamma22,
+            ColorPrimaries::Bt470bg => TransferCharacteristic::Gamma28,
+            ColorPrimaries::Smpte170m => TransferCharacteristic::Smpte170m,
+            ColorPrimaries::Smpte240m => TransferCharacteristic::Smpte240m,
+            ColorPrimaries::Bt2020 => TransferCharacteristic::Bt2020_10,
+            ColorPrimaries::Smpte428 => TransferCharacteristic::Smpte428,
+            _ => TransferCharacteristic::Bt709,
+        }
+    }
+
     /// Whether this spec is byte-for-byte the same picture description as
     /// `other`, which is what lets a conversion degrade to a plane copy.
     #[must_use]
@@ -109,6 +149,8 @@ impl ImageSpec {
             && self.height == other.height
             && self.effective_range() == other.effective_range()
             && self.effective_matrix() == other.effective_matrix()
+            && self.effective_primaries() == other.effective_primaries()
+            && self.effective_transfer() == other.effective_transfer()
     }
 }
 

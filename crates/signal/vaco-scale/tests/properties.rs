@@ -269,6 +269,49 @@ fn thread_count_never_changes_the_output() {
     }
 }
 
+/// A nonlinear colour stage has no cross-band state either: the scalar `f64`
+/// work must not make a conversion's bytes depend on scheduling.
+#[test]
+fn transfer_and_primaries_path_is_thread_deterministic() {
+    use vaco_color::{
+        ColorInfo, ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic,
+    };
+
+    let src_color = ColorInfo {
+        primaries: ColorPrimaries::Bt709,
+        transfer: TransferCharacteristic::Bt709,
+        matrix: MatrixCoefficients::Bt709,
+        range: ColorRange::Limited,
+        ..ColorInfo::default()
+    };
+    let dst_color = ColorInfo {
+        primaries: ColorPrimaries::Bt2020,
+        transfer: TransferCharacteristic::Bt2020_10,
+        matrix: MatrixCoefficients::Bt2020Ncl,
+        range: ColorRange::Limited,
+        ..ColorInfo::default()
+    };
+    let source = Image::new(PixFmt::Yuv444p, 191, 107, |plane, i| {
+        ((i * 17 + plane * 43) % 256) as u8
+    });
+    let src_spec = ImageSpec::new(PixFmt::Yuv444p, 191, 107).with_color(src_color);
+    let dst_spec = ImageSpec::new(PixFmt::Yuv444p, 191, 107).with_color(dst_color);
+    let mut reference = None;
+    for threads in [0, 2, 5] {
+        let mut options = ScaleOptions::default();
+        options.threads = threads;
+        let mut scaler = Scaler::new(&src_spec, &dst_spec, &options).expect("plan");
+        let mut output = Image::new(PixFmt::Yuv444p, 191, 107, |_, _| 0);
+        let planes = source.src();
+        let mut dst = output.dst();
+        scaler.scale_planes(&planes, &mut dst).expect("scale");
+        match &reference {
+            Some(expected) => assert_eq!(&output.planes, expected, "threads = {threads}"),
+            None => reference = Some(output.planes),
+        }
+    }
+}
+
 #[test]
 fn an_identity_conversion_is_a_copy() {
     let src = ImageSpec::new(PixFmt::Yuv420p, 64, 64);

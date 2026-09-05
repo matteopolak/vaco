@@ -200,6 +200,7 @@ mod tests {
         match colour::build(&s, &d, 8) {
             colour::ColorStage::Affine(a) => a,
             colour::ColorStage::None => panic!("expected an affine stage"),
+            colour::ColorStage::Float(_) => panic!("expected an affine stage"),
         }
     }
 

@@ -44,10 +44,11 @@
 //! subsampling and siting, and ordered dither.
 //!
 //! **Not implemented, and refused rather than approximated:** palette, Bayer,
-//! floating-point and sub-byte-packed formats, XYZ, hardware surfaces, transfer
-//! functions, primaries conversion, tone mapping, and the constant-luminance and
-//! `ICtCp`-family matrices. `docs/signal/vaco-scale.md` has the full list and the
-//! measured fidelity of everything that *is* implemented.
+//! XYZ, hardware surfaces, tone mapping, and the constant-luminance and
+//! `ICtCp`-family matrices. Transfer-characteristic and primaries conversion use
+//! a scalar `f64` stage; floating-point pixel formats are reached through integer
+//! proxies. `docs/signal/vaco-scale.md` has the full list and the measured
+//! fidelity of everything that *is* implemented.
 //!
 //! # A reference deviation we do not reproduce
 //!

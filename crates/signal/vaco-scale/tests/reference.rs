@@ -596,6 +596,102 @@ fn fidelity_against_the_reference() {
     }
 }
 
+/// The reference filter's direct Y'CbCr path, in both gamut directions.
+///
+/// Using Y'CbCr on both sides avoids an implicit RGB-to-Y'CbCr conversion
+/// outside `colorspace`, so the probe isolates transfer and primaries rather
+/// than the rawvideo wrapper's default metadata.
+#[test]
+fn primaries_and_transfer_match_reference_ycbcr_both_directions() {
+    use vaco_color::{
+        ColorInfo, ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic,
+    };
+
+    let Some(bin) = reference() else {
+        println!("SKIP: no reference ffmpeg");
+        return;
+    };
+    let bt709 = ColorInfo {
+        primaries: ColorPrimaries::Bt709,
+        transfer: TransferCharacteristic::Bt709,
+        matrix: MatrixCoefficients::Bt709,
+        range: ColorRange::Limited,
+        ..ColorInfo::default()
+    };
+    let bt2020 = ColorInfo {
+        primaries: ColorPrimaries::Bt2020,
+        transfer: TransferCharacteristic::Bt2020_10,
+        matrix: MatrixCoefficients::Bt2020Ncl,
+        range: ColorRange::Limited,
+        ..ColorInfo::default()
+    };
+    let bt709_to_bt2020_primaries = ColorInfo {
+        primaries: ColorPrimaries::Bt2020,
+        transfer: TransferCharacteristic::Bt709,
+        matrix: MatrixCoefficients::Bt709,
+        range: ColorRange::Limited,
+        ..ColorInfo::default()
+    };
+    for (name, src_color, dst_color, vf) in [
+        (
+            "bt709 -> bt2020",
+            bt709,
+            bt2020,
+            "colorspace=iall=bt709:all=bt2020:format=yuv444p",
+        ),
+        (
+            "bt2020 -> bt709",
+            bt2020,
+            bt709,
+            "colorspace=iall=bt2020:all=bt709:format=yuv444p",
+        ),
+        (
+            "bt709 primaries -> bt2020 primaries",
+            bt709,
+            bt709_to_bt2020_primaries,
+            "colorspace=iprimaries=bt709:primaries=bt2020:ispace=bt709:space=bt709:itrc=bt709:trc=bt709:irange=tv:range=tv:format=yuv444p",
+        ),
+    ] {
+        let (w, h) = (128, 96);
+        let pixels = w as usize * h as usize;
+        let mut data = vec![0u8; pixels * 3];
+        for i in 0..pixels {
+            let seed = ((i * 97 + 17) % 256) as u8;
+            data[i] = 64 + seed % 128;
+            data[pixels + i] = 112 + seed % 33;
+            data[2 * pixels + i] = 112 + (seed.wrapping_mul(37) % 33);
+        }
+        let want = run_reference(&bin, PixFmt::Yuv444p, w, h, &data, vf, PixFmt::Yuv444p)
+            .unwrap_or_else(|| panic!("{name}: reference failed"));
+        let got = run_ours(
+            PixFmt::Yuv444p,
+            w,
+            h,
+            &data,
+            PixFmt::Yuv444p,
+            w,
+            h,
+            &ScaleOptions::default(),
+            src_color,
+            dst_color,
+        )
+        .unwrap_or_else(|| panic!("{name}: scaler failed"));
+        let verdict = compare(&got, &want, 8, false);
+        println!(
+            "{name}: {}/{} differ, max {}, PSNR {:.1} dB",
+            verdict.real(),
+            verdict.bytes,
+            verdict.max_abs,
+            verdict.psnr
+        );
+        assert_eq!(got.len(), want.len(), "{name}: output size");
+        assert!(
+            verdict.max_abs <= 2 && verdict.psnr >= 55.0,
+            "{name}: outside SDR primaries tolerance: {verdict:?}"
+        );
+    }
+}
+
 /// The conversions this crate commits to being byte-identical on.
 ///
 /// Separate from the table above so that a regression in a graded-Exact path is

@@ -271,6 +271,7 @@ mod ab {
         match vaco_scale::colour::build(&src, &dst, 8) {
             ColorStage::Affine(a) => a,
             ColorStage::None => unreachable!("a Y'CbCr to R'G'B' conversion has a matrix"),
+            ColorStage::Float(_) => unreachable!("benchmark uses default matching colour metadata"),
         }
     }
 

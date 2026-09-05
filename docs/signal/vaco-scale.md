@@ -74,12 +74,36 @@ bands are disjoint `chunks_mut` slices the compiler proves cannot alias, and
 | working depth | `max(src, dst)` component depth, clamped to 8..=16, carried in `i32` |
 | filter coefficients | 14-bit fixed point, each row summing to exactly `1 << 14` |
 | between an H and a V pass | 7 extra fractional bits (an 8-bit picture travels as 15-bit) |
-| colour matrix | 13-bit fixed point out to R'G'B', 15-bit out to Y'CbCr |
+| colour matrix | 13-bit fixed point out to R'G'B', 15-bit out to Y'CbCr; `f64` only when transfer or primaries differ |
 | pack | round or Bayer-dither down to the destination depth, then clamp |
 
 Filter accumulation is `i64`, so no input can overflow it; each bank records its
 `Sum |c|` so a future `i32` kernel can select itself on a proof rather than on
 the depth happening to be eight.
+
+### 2.5 Transfer characteristics and primaries
+
+When resolved source and destination transfer characteristics or primaries
+differ, the ordinary integer affine stage is replaced by one scalar `f64`
+colour stage at the common mid grid:
+
+```text
+coded Y'CbCr/R'G'B' -> normalised R'G'B' -> linear light
+  -> Bradford-adapted RGB-primary matrix -> destination R'G'B'
+  -> destination Y'CbCr/R'G'B' codes
+```
+
+There is no intermediate integer rounding: range expansion, both Y'CbCr
+matrices, the transfer pair, and the primary matrix are evaluated before final
+destination quantisation. The primary transform is
+`M_dst^-1 * Bradford(src_white, dst_white) * M_src`, where `M` comes from
+`vaco-color`'s H.273/RP 177 chromaticities. Equal primaries skip Bradford.
+
+Omitted primaries and transfer characteristics resolve from explicit matrix
+signalling (`bt2020` -> BT.2020 / BT.2020-10, `bt470bg` -> BT.470BG / gamma
+2.8, and so on); otherwise RGB defaults to BT.709. These values participate in
+the copy-fast-path comparison, so a frame whose colour metadata changes cannot
+silently bypass conversion.
 
 ---
 
@@ -107,6 +131,8 @@ stated bound; **Divergent** = differs in ways we cannot justify.
 | `yuv420p` 2× up, bilinear | 0 / 18432 | 0 | ∞ | 0 | **Exact** |
 | `yuv420p` 2× down, area | 0 / 4608 | 0 | ∞ | 0 | **Exact** |
 | `yuv420p -> rgb24`, bt709 tv→pc | 7831 / 36864 | **1** | 54.9 | 7059 | Equivalent |
+| `bt709 Y'CbCr -> bt2020 Y'CbCr`, in gamut | 144 / 36864 | **1** | 72.2 | — | Equivalent |
+| `bt2020 Y'CbCr -> bt709 Y'CbCr`, in gamut | 192 / 36864 | **1** | 71.0 | — | Equivalent |
 | `yuv420p -> rgba`, bt709 tv→pc | 7831 / 49152 | **1** | 56.1 | 7074 | Equivalent |
 | `rgb24 -> yuv420p`, bt709 pc→tv | 824 / 18432 | **1** | 61.6 | 0 | Equivalent |
 | `yuv420p` 4× down, lanczos | 148 / 4608 | **1** | 63.1 | 82 | Equivalent |
@@ -167,11 +193,13 @@ differs, and only there.
   ratio and every colour. This is the largest open gap and the first thing to
   attack next.
 
-### Class A reproducibility
+### Reproducibility
 
-Every path here is integer arithmetic with a defined rounding rule, so output is
-identical across thread count, band split and lane width. Asserted by test, not
-by intention.
+Integer paths remain Class A: output is identical across thread count, band
+split and lane width. The transfer/primaries path is Class C because `f64`
+transcendentals are intentionally not a bit-exact reference implementation;
+it is checked against an independent high-precision oracle and against ffmpeg's
+direct in-gamut Y'CbCr `colorspace` probes (max 1 LSB, at least 67 dB).
 
 ---
 
@@ -185,8 +213,11 @@ by intention.
   both endiannesses.
 * Six resampling kernels: point, bilinear, bicubic (Mitchell–Netravali),
   lanczos, gaussian, area.
-* Range conversion; the H.273 matrices that have a linear R'G'B' form; chroma
+* Range conversion; the H.273 matrices that have a linear R'G'B' form;
+  transfer characteristics; Bradford-adapted primary conversion; chroma
   subsampling and siting; ordered (Bayer) dither.
+* Float pixel-format proxies (`grayf16`/`grayf32`, `rgbf16`/`rgbf32`) at the
+  frame boundary. The colour stage itself retains `f64` until final quantisation.
 * Slice threading, plane-copy and no-op fast paths, the full `sws` option surface.
 
 ### Not implemented — refused at plan time, never approximated
@@ -195,11 +226,11 @@ by intention.
 |---|---|
 | palette (`pal8`) | needs frame side data, which the plan cannot capture yet |
 | Bayer mosaics | needs demosaicing |
-| floating-point formats | the pipeline is integer end to end |
+| XYZ | needs the dedicated XYZ pixel-format path |
 | sub-byte packings (`monow`, `rgb4`) | not addressable by load-shift-mask |
-| XYZ | needs the transfer stage |
 | hardware surfaces | not in this address space |
-| transfer functions, primaries conversion, tone mapping, `gamma=1` | the whole float colour path |
+| tone mapping and gamut intents | need mastering metadata and a defined gamut mapping policy (SP-A6) |
+| `gamma=1` | needs filter placement inside the linear-light domain, not only colour conversion |
 | constant-luminance, `ICtCp`, `IPT-C2`, `YCgCo-R`, ST 2085 matrices | not a linear transform on R'G'B' |
 | error-diffusion and arithmetic dither | `Bayer` and `none` only |
 | alpha premultiply and `alphablend` | alpha passes through |

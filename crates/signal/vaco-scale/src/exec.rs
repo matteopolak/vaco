@@ -31,7 +31,7 @@ use rayon::prelude::*;
 use vaco_core::{Error, Result};
 use vaco_limits::{Budget, Limits};
 
-use crate::colour::{Affine, ColorStage};
+use crate::colour::{Affine, ColorStage, FloatTransform};
 use crate::dither::{bayer_threshold, expand_depth, reduce_depth, reduce_depth_dithered};
 use crate::filter::{COEFF_SHIFT, FilterBank};
 
@@ -381,6 +381,18 @@ fn run_band(
             }
         }
     }
+    if let ColorStage::Float(a) = g.colour {
+        let [m0, m1, m2, _] = &mut mid;
+        if let (Some(g0), Some(g1), Some(g2)) = (m0.as_mut(), m1.as_mut(), m2.as_mut()) {
+            for y in union.0..union.1 {
+                let (Some(r0), Some(r1), Some(r2)) = (g0.row_mut(y), g1.row_mut(y), g2.row_mut(y))
+                else {
+                    continue;
+                };
+                apply_float(&a, r0, r1, r2);
+            }
+        }
+    }
 
     // 4. Down-resample, quantise, pack.
     for c in 0..g.live {
@@ -529,6 +541,17 @@ fn build_mid(
 /// against without reimplementing the semantics.
 #[inline]
 pub(crate) fn apply_affine(a: &Affine, r0: &mut [i32], r1: &mut [i32], r2: &mut [i32]) {
+    for ((v0, v1), v2) in r0.iter_mut().zip(r1.iter_mut()).zip(r2.iter_mut()) {
+        let [o0, o1, o2] = a.apply([*v0, *v1, *v2]);
+        *v0 = o0;
+        *v1 = o1;
+        *v2 = o2;
+    }
+}
+
+/// Apply the nonlinear transfer/primaries path on three logical channels.
+#[inline]
+pub(crate) fn apply_float(a: &FloatTransform, r0: &mut [i32], r1: &mut [i32], r2: &mut [i32]) {
     for ((v0, v1), v2) in r0.iter_mut().zip(r1.iter_mut()).zip(r2.iter_mut()) {
         let [o0, o1, o2] = a.apply([*v0, *v1, *v2]);
         *v0 = o0;
