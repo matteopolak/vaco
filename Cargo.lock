@@ -2867,7 +2867,6 @@ dependencies = [
  "vaco-core",
  "vaco-format-nalu",
  "vaco-frame",
- "vaco-hash",
  "vaco-limits",
  "vaco-packet",
  "vaco-parse-hevc",
