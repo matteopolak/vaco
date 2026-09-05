@@ -108,23 +108,29 @@ impl Opts {
 /// A `(2r+1)x(2r+1)` normalised box average of an `f64` plane, clamp-bordered
 /// (see this module's doc for why clamp, not zero, was chosen).
 fn box_avg(vals: &[Vec<f64>], w: i32, h: i32, r: i32) -> Vec<Vec<f64>> {
-    let get = |x: i32, y: i32| -> f64 {
-        let cy = usize::try_from(y.clamp(0, h.saturating_sub(1).max(0))).unwrap_or(0);
-        let cx = usize::try_from(x.clamp(0, w.saturating_sub(1).max(0))).unwrap_or(0);
-        vals.get(cy)
-            .and_then(|row| row.get(cx))
-            .copied()
-            .unwrap_or(0.0)
-    };
     let count = f64::from((2 * r + 1) * (2 * r + 1));
+    let span = usize::try_from(r.saturating_mul(2).saturating_add(1)).unwrap_or(0);
+    let x_indices = axis_indices(w, r);
+    let y_indices = axis_indices(h, r);
     let mut out = Vec::new();
     for y in 0..h {
         let mut row = Vec::new();
         for x in 0..w {
             let mut sum = 0.0;
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    sum += get(x + dx, y + dy);
+            let x_base = usize::try_from(x).unwrap_or(0) * span;
+            let y_base = usize::try_from(y).unwrap_or(0) * span;
+            for dy in 0..span {
+                let sampled_row = y_indices
+                    .get(y_base + dy)
+                    .and_then(|&index| vals.get(index))
+                    .map_or(&[][..], Vec::as_slice);
+                for dx in 0..span {
+                    let value = x_indices
+                        .get(x_base + dx)
+                        .and_then(|&index| sampled_row.get(index))
+                        .copied()
+                        .unwrap_or(0.0);
+                    sum += value;
                 }
             }
             row.push(sum / count);
@@ -132,6 +138,19 @@ fn box_avg(vals: &[Vec<f64>], w: i32, h: i32, r: i32) -> Vec<Vec<f64>> {
         out.push(row);
     }
     out
+}
+
+fn axis_indices(length: i32, radius: i32) -> Vec<usize> {
+    let max = length.saturating_sub(1).max(0);
+    let mut indices = Vec::new();
+    for coordinate in 0..length {
+        for offset in -radius..=radius {
+            indices.push(
+                usize::try_from(coordinate.saturating_add(offset).clamp(0, max)).unwrap_or(0),
+            );
+        }
+    }
+    indices
 }
 
 fn guided_plane(rows: &[&[u8]], w: i32, h: i32, radius: i32, eps: f64) -> Vec<Vec<u8>> {
