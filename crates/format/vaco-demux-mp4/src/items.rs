@@ -178,6 +178,14 @@ impl<'a> Meta<'a> {
                 bt::IPRP => {
                     me.ipco = heif::parse_ipco(&child);
                     me.ipma = heif::parse_ipma(&child)?;
+                    if me
+                        .ipma
+                        .iter()
+                        .flat_map(|association| association.properties.iter())
+                        .any(|&(_, index)| usize::from(index) > me.ipco.len())
+                    {
+                        return None;
+                    }
                 }
                 bt::IREF => me.irefs = heif::parse_iref(&child),
                 bt::IDAT => me.idat = Some((child.payload, child.payload_offset())),

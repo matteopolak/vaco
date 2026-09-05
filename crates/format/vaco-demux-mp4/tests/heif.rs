@@ -318,6 +318,25 @@ fn a_truncated_property_association_table_refuses_the_item_file() {
 }
 
 #[test]
+fn an_out_of_range_property_association_refuses_the_item_file() {
+    let mut bytes = heif();
+    let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
+    // The first association's index is one-based into five `ipco` boxes.
+    // Index six must not be silently omitted from the item's configuration.
+    bytes[ipma + 15] = 6;
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    assert!(
+        Mp4Demuxer::open(
+            src,
+            &NoParsers,
+            &FormatOptions::default(),
+            Mp4Options::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn a_meta_box_that_is_not_pict_is_still_no_movie() {
     let mut bytes = heif();
     // Flip the handler to `mdta`: a QuickTime metadata `meta`, not items.

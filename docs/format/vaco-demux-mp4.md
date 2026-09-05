@@ -820,9 +820,10 @@ crate decides what becomes a stream:
   sample-entry reader tracks use (`track::codec_parameters_with_display`):
   the item's `ipco` properties are re-serialised as the entry's extension
   boxes, because `av1C`/`hvcC`/`colr`/`pasp`/`pixi` are literally the same
-  boxes in both worlds. A malformed present `ipma` table refuses the item
-  file rather than applying a partial property configuration. `ispe` supplies
-  the size; an item with no `pasp`
+  boxes in both worlds. A malformed present `ipma` table, including an index
+  beyond its `ipco` property list, refuses the item file rather than applying
+  a partial property configuration. `ispe` supplies the size; an item with no
+  `pasp`
   reports `sample_aspect_ratio 1:1` (measured — the reference prints `1:1`
   for an AVIF item where the same codec in a track prints nothing).
 * **Every `grid` item becomes a `TileGrid` stream group**, not a stream:
