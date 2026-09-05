@@ -857,9 +857,9 @@ impl HevcDecoder {
                             "vaco-codec-hevc: only one independent full-picture tile slice is supported",
                         ));
                     }
-                    if ctbs_y != 1 {
+                    if pps.cu_qp_delta_enabled {
                         return Err(Error::Unsupported(
-                            "vaco-codec-hevc: tile pictures taller than one CTB row are not supported",
+                            "vaco-codec-hevc: tile pictures with cu_qp_delta are not supported",
                         ));
                     }
                     if !parsed.deblocking_filter_disabled || parsed.sao_luma || parsed.sao_chroma {
@@ -876,6 +876,7 @@ impl HevcDecoder {
                         &parsed.entry_point_offsets,
                         layout,
                         &mut walk,
+                        ctbs_y,
                         ctb_size_i,
                         i8::try_from(segment_qp.clamp(0, 51)).unwrap_or(0),
                         parsed.kind,
@@ -1435,10 +1436,12 @@ fn ebsp_offset_for_rbsp_len(ebsp: &[u8], rbsp_target_len: usize) -> usize {
     ebsp.len()
 }
 
-/// Decode one tiles-only, single-row-picture slice into tile-local CABAC
-/// substreams. §7.4.7.1 measures every entry-point length in the escaped
-/// slice payload, so each range is de-escaped independently before its fresh
-/// arithmetic decoder is initialized.
+/// Decode one tiles-only slice into tile-local CABAC substreams.
+/// §7.4.7.1 measures every entry-point length in the escaped slice payload,
+/// so each range is de-escaped independently before its fresh arithmetic
+/// decoder is initialized. Tile scan consumes each substream top-to-bottom,
+/// while the outer row walk suspends its CABAC/context state between CTU rows
+/// so reconstruction, edge, CU and SAO publication all remain raster ordered.
 #[allow(
     clippy::too_many_arguments,
     reason = "one decoder call site keeps the tile boundary data explicit"
@@ -1450,6 +1453,7 @@ fn decode_tile_substreams(
     entry_point_offsets: &[u32],
     layout: &TileLayout,
     walk: &mut Ctx<'_, '_, '_, '_>,
+    ctbs_y: u32,
     ctb_size_i: i32,
     qp: i8,
     kind: SliceKind,
@@ -1461,10 +1465,13 @@ fn decode_tile_substreams(
     let substream_count = layout.tile_substream_count().ok_or(Error::InvalidData(
         "vaco-codec-hevc: tile substream count overflow",
     ))?;
+    let mut rectangles = Vec::new();
+    let mut tile_data = Vec::new();
     for tile_id in 0..substream_count {
         let (x0, x1, y0, y1) = layout.tile_rect(tile_id).ok_or(Error::InvalidData(
             "vaco-codec-hevc: tile rectangle is missing",
         ))?;
+        rectangles.push((x0, x1, y0, y1));
         let range_index = usize::try_from(tile_id).map_err(|_| {
             Error::InvalidData("vaco-codec-hevc: tile substream index is too large")
         })?;
@@ -1474,27 +1481,34 @@ fn decode_tile_substreams(
         let bytes = ebsp_slice_data.get(start..end).ok_or(Error::InvalidData(
             "vaco-codec-hevc: tile substream range is invalid",
         ))?;
-        let mut tile_rbsp = Vec::new();
-        let tile_data = vaco_bitstream::annexb::to_rbsp(bytes, &mut tile_rbsp);
-        let mut cabac = CabacDecoder::new(tile_data);
-        if cabac.malformed() {
+        let mut rbsp = Vec::new();
+        vaco_bitstream::annexb::to_rbsp(bytes, &mut rbsp);
+        if CabacDecoder::new(&rbsp).malformed() {
             return Err(Error::InvalidData(
                 "vaco-codec-hevc: tile CABAC initialization is malformed",
             ));
         }
-        let mut context = new_context_bank(kind, cabac_init, qp);
-        walk.begin_tile_substream(x0, x1, y0, y1);
-        let is_last_tile = tile_id.saturating_add(1) == substream_count;
-        let mut completed = false;
-        for row in y0..y1 {
-            let row_us = usize::try_from(row).unwrap_or(usize::MAX);
-            if x0 == 0 {
-                walk.edges.begin_row(row_us)?;
-                walk.cu_grid.begin_row(budget, row_us)?;
-                walk.sao_params.begin_row(budget, row_us)?;
+        tile_data.push(rbsp);
+    }
+    let mut cabacs: Vec<_> = tile_data.iter().map(|data| CabacDecoder::new(data)).collect();
+    let mut contexts = vec![new_context_bank(kind, cabac_init, qp); tile_data.len()];
+    for row in 0..ctbs_y {
+        let row_us = usize::try_from(row).unwrap_or(usize::MAX);
+        walk.edges.begin_row(row_us)?;
+        walk.cu_grid.begin_row(budget, row_us)?;
+        walk.sao_params.begin_row(budget, row_us)?;
+        for (tile_index, &(x0, x1, y0, y1)) in rectangles.iter().enumerate() {
+            if row < y0 || row >= y1 {
+                continue;
             }
+            let cabac = cabacs.get_mut(tile_index).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: tile CABAC state is missing",
+            ))?;
+            let context = contexts.get_mut(tile_index).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: tile CABAC context is missing",
+            ))?;
+            walk.begin_tile_substream(x0, x1, y0, y1);
             for col in x0..x1 {
-                let row_us = usize::try_from(row).unwrap_or(usize::MAX);
                 let col_us = usize::try_from(col).unwrap_or(usize::MAX);
                 walk.recon.begin_ctu(row_us, col_us)?;
                 let addr = row
@@ -1505,7 +1519,7 @@ fn decode_tile_substreams(
                     ))?;
                 let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
                 let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
-                ctu::decode_ctu(&mut cabac, &mut context, walk, cx, cy, addr)?;
+                ctu::decode_ctu(cabac, context, walk, cx, cy, addr)?;
                 walk.recon.publish_ctu(row_us, col_us)?;
                 let end = cabac.decode_terminate();
                 if cabac.malformed() {
@@ -1513,33 +1527,24 @@ fn decode_tile_substreams(
                         "vaco-codec-hevc: CABAC decode ran past the tile substream data",
                     ));
                 }
-                if row.saturating_add(1) == y1 && col.saturating_add(1) == x1 {
-                    if !is_last_tile && end != 0 {
-                        return Err(Error::InvalidData(
-                            "vaco-codec-hevc: tile substream terminated before slice end",
-                        ));
-                    }
-                    if is_last_tile && end == 0 {
-                        return Err(Error::InvalidData(
-                            "vaco-codec-hevc: final tile substream did not terminate",
-                        ));
-                    }
-                    completed = true;
-                    break;
-                } else if end != 0 {
+                let final_ctb = row.saturating_add(1) == y1 && col.saturating_add(1) == x1;
+                let final_tile = tile_index.saturating_add(1) == rectangles.len();
+                if final_ctb && !final_tile && end != 0 {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: tile substream terminated before slice end",
+                    ));
+                }
+                if final_ctb && final_tile && end == 0 {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: final tile substream did not terminate",
+                    ));
+                }
+                if !final_ctb && end != 0 {
                     return Err(Error::InvalidData(
                         "vaco-codec-hevc: tile substream terminated before its final CTB",
                     ));
                 }
             }
-            if completed {
-                break;
-            }
-        }
-        if !completed {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: tile substream did not cover its declared CTBs",
-            ));
         }
     }
     Ok(())

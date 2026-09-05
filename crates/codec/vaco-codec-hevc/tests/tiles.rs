@@ -145,10 +145,15 @@ fn nonuniform_tile_widths_and_heights_leave_edges_unavailable() {
     };
     let layout = TileLayout::from_pps(&tiles, 6, 3).expect("positive partition is valid");
 
+    assert_eq!(layout.tile_substream_count(), Some(6));
     assert_eq!(layout.tile_at(0, 0), Some(0));
     assert_eq!(layout.tile_at(1, 0), Some(1));
     assert_eq!(layout.tile_at(3, 0), Some(2));
     assert_eq!(layout.tile_at(0, 1), Some(3));
+    assert_eq!(layout.tile_rect(0), Some((0, 1, 0, 1)));
+    assert_eq!(layout.tile_rect(2), Some((3, 6, 0, 1)));
+    assert_eq!(layout.tile_rect(3), Some((0, 1, 1, 3)));
+    assert_eq!(layout.tile_rect(5), Some((3, 6, 1, 3)));
     assert!(!layout.left_available(1, 0));
     assert!(layout.left_available(2, 0));
     assert!(!layout.above_available(0, 1));

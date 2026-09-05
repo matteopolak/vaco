@@ -17,7 +17,7 @@ landed" below), per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see
 weighted prediction (§8.5.3.3.4.3, see "Weighted prediction
 (§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Filter
 suppression for protected I_PCM and transquant-bypass CUs shares one per-CU
-mask. One-row, filtering-disabled tiles are decoded; other tile shapes and
+mask. Filtering-disabled tiles without per-CU QP changes are decoded; other tile shapes and
 every range-extension feature remain out of scope — see "What was cut" below. I_PCM is implemented both
 with and without per-CU loop-filter suppression.
 
@@ -172,8 +172,8 @@ own decode of the same file byte-for-byte, per plane, end to end.
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, SPS/PPS range extensions, SCC
-extensions and all tile shapes outside the bounded one-row, filtering-disabled
-tiles-only path. Neither I_PCM (including
+extensions and all tile shapes outside the bounded filtering-disabled,
+no-`cu_qp_delta` tiles-only path. Neither I_PCM (including
 `pcm_loop_filter_disabled_flag`), transform skip, deblocking, SAO,
 `cu_qp_delta_enabled`, P-slices, B-slices, nor
 weighted (uni- or bi-predictive) prediction are on this list any more.
@@ -203,7 +203,7 @@ module doc).
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (tile shapes beyond the bounded one-row path — inter prediction (P- and B-slices),
+- **Extending scope** (tile shapes beyond the bounded no-`cu_qp_delta` path — inter prediction (P- and B-slices),
   deblocking, SAO, WPP, `cu_qp_delta` and weighted (uni- and bi-predictive)
   prediction are done, see their own sections above): the corresponding
   SPS/PPS fields already correctly return `Error::Unsupported` by name in
@@ -955,16 +955,18 @@ decodes to exactly 7,188,480 yuv420p bytes. Vaco matches the archive's
 `e067aa3a6a12cd5743849ded793c8d3f` MD5 and every Y, U, and V byte. Other
 unproven non-row-aligned boundaries remain named refusals.
 
-## One-row tile reconstruction
+## Multi-row tile reconstruction
 
 `TileLayout` validates the PPS geometry and maps tile IDs to half-open CTB
 rectangles. The decoder accepts one independent, full-picture tiles-only slice
-whose picture is exactly one CTB row high and whose deblocking and SAO are
-disabled. It partitions the escaped slice payload at §7.4.7.1 entry points,
-de-escapes each tile range independently, and initializes fresh arithmetic and
-CABAC context state for every tile. CTUs then use the normal coding and
-transform-tree reconstruction path; `Ctx` narrows syntax-neighbour availability
-to the active tile without resetting the slice QP predictor.
+with deblocking, SAO, and `cu_qp_delta` disabled. It partitions the escaped
+slice payload at §7.4.7.1 entry points, de-escapes each tile range
+independently, and initializes fresh arithmetic and CABAC context state for
+every tile. CABAC states are suspended between tile rows so CTUs reconstruct in
+picture-raster order; that preserves the existing reconstruction, edge, CU and
+SAO row-publication contract while `Ctx` narrows syntax-neighbour availability
+to the active tile. The no-`cu_qp_delta` boundary makes the slice QP predictor
+constant while the tile states are interleaved.
 
 The fixture in `tests/tiles.rs` is a 1,813-byte 512x64 HM 18.0 IDR with two
 uniform tile columns. It validates the geometry and CABAC boundaries, then
@@ -972,9 +974,10 @@ decodes the whole access unit and compares the 49,152 visible yuv420p bytes
 byte-for-byte with an independently generated ffmpeg reference (MD5
 `6ccc33b0cd92240a275d30a05de031cc`).
 
-Taller tile pictures, multiple or dependent tile slices, tiles combined with
-WPP, and tile pictures requiring deblocking or SAO remain named refusals. Their
-row-publication/filtering rules must be integrated before extending this scope.
+Multiple or dependent tile slices, tiles combined with WPP, tile pictures with
+`cu_qp_delta`, and tile pictures requiring deblocking or SAO remain named
+refusals. Their slice-state and filtering rules must be integrated before
+extending this scope.
 
 ## Per-CU QP delta (`cu_qp_delta`), landed
 
