@@ -634,9 +634,9 @@ place rather than accepting a configuration this crate cannot yet act on.
 Replacing decoder extradata clears the prior extradata configuration, cached
 in-band configuration, and overlap state before parsing the replacement. That
 also applies when the replacement is rejected: a caller cannot submit a
-headerless HE-AAC access unit after its explicit-SBR error and have it decoded
-under the preceding AAC-LC configuration; it fails packet configuration and
-queues no frame.
+headerless access unit after either an explicit-SBR or explicit-PS error and
+have it decoded under the preceding AAC-LC configuration; it fails packet
+configuration and queues no frame.
 
 Explicit **Parametric Stereo** uses the second backward-compatible sync
 extension after present SBR: `syncExtensionType=0x548`, followed by

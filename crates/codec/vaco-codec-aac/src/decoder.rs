@@ -962,15 +962,24 @@ mod tests {
     }
 
     #[test]
-    fn explicit_ps_extradata_is_refused_before_frame_output() {
+    fn rejected_explicit_ps_extradata_cannot_leave_an_old_lc_config_live() {
         let extradata = explicit_ps_audio_specific_config();
         let asc = vaco_parse_aac::AudioSpecificConfig::parse(&extradata).unwrap();
         assert!(asc.has_sbr());
         assert!(matches!(asc.ps, vaco_parse_aac::Signal::Present));
 
         let mut dec = AacDecoder::new(Limits::permissive());
+        dec.set_extradata(&[0x11, 0x88]).unwrap(); // AAC-LC, 48000 Hz mono
         let error = dec.set_extradata(&extradata).unwrap_err();
         assert!(error.to_string().contains("Parametric Stereo"));
+
+        let adts = adts_frame_with_minimal_raw_data_block();
+        let raw_body = adts.get(7..).unwrap();
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, raw_body).unwrap();
+
+        let error = dec.send_packet(Some(&packet)).unwrap_err();
+        assert!(matches!(error, Error::UnexpectedEof), "{error}");
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 
