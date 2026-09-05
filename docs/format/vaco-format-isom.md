@@ -790,8 +790,9 @@ Named so the demuxer's author knows what is not here:
   bits). `ipma` accepts only its version `0`/`1` item-ID layouts, and `infe`
   only versions `0` through `3`. `iinf`'s declared entry count also bounds
   the `infe` children it exposes. An unsupported width or version refuses the
-  entire location/property/item table before it can invent a zero-length
-  extent, surface a trailing item, or apply the wrong layout. Still box-layer
+  entire location/property/item table before it can invent a zero-length or
+  wrapped extent, surface a trailing item, or apply the wrong layout. Still
+  box-layer
   only here: `iovl`/`iden`
   derived items, `auxl`/`thmb` reference semantics, and `irot`/`imir`
   transformative properties.

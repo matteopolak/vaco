@@ -233,7 +233,10 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
             }
             let extent_offset = read_sized(&mut r, offset_size);
             let extent_length = read_sized(&mut r, length_size);
-            extents.push((base_offset.saturating_add(extent_offset), extent_length));
+            let Some(offset) = base_offset.checked_add(extent_offset) else {
+                return Vec::new();
+            };
+            extents.push((offset, extent_length));
         }
         out.push(ItemLocation {
             item_id,
@@ -559,6 +562,23 @@ mod tests {
             0, 0, 0, 1, // extent_offset
         ];
         let raw = fullbx(b"iloc", 0, 0, &body);
+        assert!(parse_iloc(&first_box(&raw)).is_empty());
+    }
+
+    #[test]
+    fn iloc_rejects_an_extent_offset_that_overflows_its_base() {
+        let mut body = vec![
+            0x88, 0x80, // offset_size=8, length_size=8, base_offset_size=8
+            0, 1, // item_count
+            0, 1, // item_id
+            0, 0, // construction_method=FileOffset
+            0, 0, // data_reference_index
+        ];
+        body.extend_from_slice(&u64::MAX.to_be_bytes());
+        body.extend_from_slice(&1u16.to_be_bytes()); // extent_count
+        body.extend_from_slice(&1u64.to_be_bytes()); // extent_offset
+        body.extend_from_slice(&1u64.to_be_bytes()); // extent_length
+        let raw = fullbx(b"iloc", 1, 0, &body);
         assert!(parse_iloc(&first_box(&raw)).is_empty());
     }
 
