@@ -5,6 +5,8 @@
 //! highest-churn file in the repository.
 
 use crate::{Task, crates, repo_root};
+use std::collections::BTreeSet;
+use std::path::Path;
 
 pub fn run(check: bool) -> Task {
     let root = repo_root();
@@ -32,7 +34,8 @@ pub fn run(check: bool) -> Task {
     // the index while it listed only crates, which is how `docs/provenance.md`
     // — the file the whole clean-room claim rests on — ended up reachable only
     // by knowing its name.
-    for (file, title) in topics(&root) {
+    let crate_docs: BTreeSet<_> = rows.iter().map(|(_, _, _, doc, _)| doc.clone()).collect();
+    for (file, title) in topics(&root, &crate_docs) {
         out.push_str(&format!("- [{title}](docs/{file})\n"));
     }
     out.push_str("\n## Crates\n\n| Crate | Layer | Purpose | Doc |\n|---|---|---|---|\n");
@@ -63,35 +66,90 @@ pub fn run(check: bool) -> Task {
     Ok(())
 }
 
-/// Every `docs/*.md` that is not the index itself, as (filename, first heading).
+/// Every documentation page that is not a crate page or the index itself, as
+/// (path relative to `docs/`, first heading).
 ///
 /// The title comes from the file's own `# ` heading rather than from a list
-/// here, so adding a topic doc is one file rather than two.
-fn topics(root: &std::path::Path) -> Vec<(String, String)> {
+/// here, so adding a topic doc is one file rather than two. Walking below
+/// `docs/` also makes standalone subsystem pages visible without giving them
+/// a second hand-maintained index entry.
+fn topics(root: &Path, crate_docs: &BTreeSet<String>) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root.join("docs")) else {
-        return out;
+    collect_topics(&root.join("docs"), root, crate_docs, &mut out);
+    out.sort();
+    out
+}
+
+fn collect_topics(
+    dir: &Path,
+    root: &Path,
+    crate_docs: &BTreeSet<String>,
+    out: &mut Vec<(String, String)>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     for e in entries.flatten() {
         let p = e.path();
+        if p.is_dir() {
+            collect_topics(&p, root, crate_docs, out);
+            continue;
+        }
         if p.extension().is_none_or(|x| x != "md") {
             continue;
         }
-        let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        let Ok(relative) = p.strip_prefix(root.join("docs")) else {
             continue;
         };
-        if name == "README.md" {
+        let file = relative
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        if file == "README.md" || crate_docs.contains(&format!("docs/{file}")) {
             continue;
         }
+        let fallback = p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file.clone());
         let text = std::fs::read_to_string(&p).unwrap_or_default();
         let title = text
             .lines()
             .find_map(|l| l.strip_prefix("# "))
-            .unwrap_or(&name)
+            .unwrap_or(&fallback)
             .trim()
             .to_owned();
-        out.push((name, title));
+        out.push((file, title));
     }
-    out.sort();
-    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::topics;
+    use std::collections::BTreeSet;
+    use std::fs;
+
+    #[test]
+    fn nested_standalone_docs_are_indexed_but_crate_docs_are_not() {
+        let root = std::env::temp_dir().join(format!("vaco-docs-topics-{}", std::process::id()));
+        let docs = root.join("docs/filter");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&docs).expect("create test docs");
+        fs::write(docs.join("vaco-filter-smartblur.md"), "# smartblur\n")
+            .expect("write standalone doc");
+        fs::write(docs.join("vaco-filter-blur.md"), "# blur crate\n").expect("write crate doc");
+        fs::write(root.join("docs/README.md"), "# index\n").expect("write index");
+
+        let mut crate_docs = BTreeSet::new();
+        crate_docs.insert("docs/filter/vaco-filter-blur.md".to_owned());
+        let found = topics(&root, &crate_docs);
+
+        assert_eq!(
+            found,
+            vec![(
+                "filter/vaco-filter-smartblur.md".to_owned(),
+                "smartblur".to_owned()
+            )]
+        );
+        fs::remove_dir_all(root).expect("remove test docs");
+    }
 }
