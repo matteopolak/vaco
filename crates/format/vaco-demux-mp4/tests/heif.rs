@@ -66,6 +66,10 @@ fn iloc(entries: &[(u16, u16, &[(u32, u32)])]) -> Vec<u8> {
 /// Items: 1 = tile A, 2 = tile B (two extents), 3 = grid (primary, in
 /// `idat`), 4 = thumbnail. Returns the file bytes.
 fn heif_with_grid_clap(clap_values: [u32; 8]) -> Vec<u8> {
+    heif_with_grid_clap_and_tile_b_width(clap_values, 16)
+}
+
+fn heif_with_grid_clap_and_tile_b_width(clap_values: [u32; 8], tile_b_width: u32) -> Vec<u8> {
     let ftyp = bx(
         b"ftyp",
         &[b"mif1".as_slice(), &0u32.to_be_bytes(), b"mif1", b"jpeg"].concat(),
@@ -97,11 +101,18 @@ fn heif_with_grid_clap(clap_values: [u32; 8]) -> Vec<u8> {
             .collect::<Vec<_>>(),
     );
     let iref = fullbx(b"iref", 0, 0, &[dimg, thmb].concat());
-    // ipco: 1 = tile ispe 16x8, 2 = grid ispe 30x8 (cropped from 32x8),
-    // 3 = thumb ispe 4x2, 4 = the grid's clean aperture.
+    // ipco: 1 = tile A ispe 16x8, 2 = grid ispe 30x8 (cropped from 32x8),
+    // 3 = thumb ispe 4x2, 4 = the grid's clean aperture, 5 = tile B ispe.
     let ipco = bx(
         b"ipco",
-        &[ispe(16, 8), ispe(30, 8), ispe(4, 2), clap(clap_values)].concat(),
+        &[
+            ispe(16, 8),
+            ispe(30, 8),
+            ispe(4, 2),
+            clap(clap_values),
+            ispe(tile_b_width, 8),
+        ]
+        .concat(),
     );
     let ipma = fullbx(
         b"ipma",
@@ -110,7 +121,7 @@ fn heif_with_grid_clap(clap_values: [u32; 8]) -> Vec<u8> {
         &[
             4u32.to_be_bytes().as_slice(),
             &[0, 1, 1, 1],
-            &[0, 2, 1, 1],
+            &[0, 2, 1, 5],
             &[0, 3, 2, 2, 4],
             &[0, 4, 1, 3],
         ]
@@ -275,6 +286,16 @@ fn a_grid_with_an_unrepresentable_or_out_of_bounds_clap_is_refused() {
         assert_eq!(demux.streams().len(), 3, "coded items remain reachable");
         assert!(demux.stream_groups().is_empty(), "invalid grid is absent");
     }
+}
+
+#[test]
+fn a_grid_with_mismatched_tile_geometry_is_refused() {
+    let demux = open(heif_with_grid_clap_and_tile_b_width(
+        [26, 1, 6, 1, 1, 1, 0, 1],
+        15,
+    ));
+    assert_eq!(demux.streams().len(), 3, "coded items remain reachable");
+    assert!(demux.stream_groups().is_empty(), "invalid grid is absent");
 }
 
 #[test]

@@ -828,8 +828,9 @@ crate decides what becomes a stream:
   for `construction_method 1`, from the file for 0) gives rows, columns
   and output size, and the tiles' own `ispe` gives the canvas (`coded_*`)
   and per-tile offsets. A grid whose tile count is not `rows × columns`,
-  whose tiles are not streams, or whose output exceeds its canvas produces
-  **no group** rather than a wrong one. An associated `clap` property is
+  whose tiles are not streams or do not share one `ispe` size, or whose output
+  exceeds its canvas produces **no group** rather than a wrong one. An
+  associated `clap` property is
   resolved over the grid's reconstructed output using HEIF §6.5.9 and
   ISOBMFF §12.1.4 centre-offset semantics, then folded into the group's
   integer `width`/`height` and `horizontal_offset`/`vertical_offset`. A

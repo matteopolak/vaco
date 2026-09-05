@@ -374,6 +374,13 @@ impl<'a> Meta<'a> {
         }
         // Every tile has the same size (§6.6.2.3.1); the canvas is the
         // tiles laid edge to edge, and the output is cropped from it.
+        for &index in &members {
+            let tile = streams.iter().find(|s| s.index == index)?;
+            let dimensions = tile.params.video.as_ref().map(|v| (v.width, v.height))?;
+            if dimensions != (tile_w, tile_h) {
+                return None;
+            }
+        }
         let coded_width = tile_w.checked_mul(grid.columns)?;
         let coded_height = tile_h.checked_mul(grid.rows)?;
         if grid.output_width > coded_width || grid.output_height > coded_height {
