@@ -421,8 +421,7 @@ impl<'a> SampleToChunk<'a> {
     ///
     /// [`Error::InvalidData`] when `first_chunk` does not start at 1 or does
     /// not strictly increase. Both make the run's extent undefined, and every
-    /// sample offset derived from it would be invented rather than read
-    /// (`planning/18-formats.md` §3.1.10).
+    /// sample offset derived from it would be invented rather than read.
     pub fn parse(full: &FullBox<'a>, chunk_count: u32) -> Result<Self> {
         let (declared, rest) = count_and_rest(full.body);
         let runs = EntryTable::new(rest, 12, declared);
@@ -1291,14 +1290,6 @@ impl<'a> SampleTable<'a> {
 /// missing, or one whose offset plus the running size overflows `u64`. It stops
 /// only when the chunk layout no longer covers the index at all, which is
 /// monotone: `stsc` runs out once and stays out.
-///
-/// The first version stopped at the first unresolvable sample instead, and the
-/// `isom_sample_table` fuzz target refuted it in 27 executions with a `co64`
-/// whose first chunk offset was `u64::MAX`: sample 0 resolved, samples 1..43
-/// overflowed, and sample 44 — in the *second* chunk, at a perfectly ordinary
-/// offset — was reachable by random access and not by the cursor. One bad chunk
-/// offset must cost one chunk, not the rest of the track, which is also what
-/// `planning/18-formats.md` §3.1.10 says about samples past the end of `mdat`.
 ///
 /// # Why skipping is bounded
 ///

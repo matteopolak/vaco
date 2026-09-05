@@ -155,8 +155,7 @@ pub mod boxes {
         // `MDCV`/`CLLI` (the ISOBMFF-amendment names) and `SMDM`/`COLL` (the
         // older WebM-derived pair some AV1/VP9 muxers use instead):
         // recognised, but no reader in this tree parses their contents --
-        // finding 22b (`planning/INTERFACE-GAPS.md`). Left unparsed
-        // deliberately rather than guessed at: a real fixture to verify the
+        // Left unparsed deliberately rather than guessed at: a real fixture to verify the
         // byte layout against was attempted and could not be produced --
         // real `ffmpeg 9.0.1`'s own `mov` muxer wrote neither box for any
         // combination tried (HEVC in-band-SEI `-c:v copy` remux, HEVC direct

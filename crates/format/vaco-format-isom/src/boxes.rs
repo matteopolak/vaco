@@ -316,8 +316,7 @@ impl<'a> FullBox<'a> {
 /// present in this one container, and never a new scan or a new
 /// allocation, so it cannot amplify into a denial of service or escape
 /// into a sibling *container's* data the way an unbounded resync could.
-/// Weighed and accepted for the class of corruption measured; see
-/// `planning/INTERFACE-GAPS.md` for the full decision record.
+/// Weighed and accepted for the class of corruption measured.
 #[derive(Debug, Clone)]
 pub struct BoxIter<'a> {
     data: &'a [u8],
