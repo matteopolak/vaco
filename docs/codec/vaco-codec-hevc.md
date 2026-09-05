@@ -959,7 +959,7 @@ unproven non-row-aligned boundaries remain named refusals.
 
 `TileLayout` validates the PPS geometry and maps tile IDs to half-open CTB
 rectangles. The decoder accepts one independent, full-picture tiles-only slice
-with SAO and `cu_qp_delta` disabled. It partitions the escaped
+with `cu_qp_delta` disabled. It partitions the escaped
 slice payload at §7.4.7.1 entry points, de-escapes each tile range
 independently, and initializes fresh arithmetic and CABAC context state for
 every tile. CABAC states are suspended between tile rows so CTUs reconstruct in
@@ -977,17 +977,17 @@ byte-for-byte with an independently generated ffmpeg reference (MD5
 The regular deblock pass derives each filtered edge's two CTBs and suppresses
 only a cross-tile edge when PPS
 `loop_filter_across_tiles_enabled_flag` is clear; edges within a tile and all
-cross-tile edges when it is set keep the ordinary filtering path. Tile SAO is
-still a named refusal because its snapshot/filter neighbourhood rules have not
-yet been made tile-aware.
+cross-tile edges when it is set keep the ordinary filtering path. SAO uses the
+same gate for each edge-offset neighbour, in luma coordinates for all three
+planes; a boundary-disallowed neighbour leaves that output sample unchanged.
+Band-offset SAO has no neighbour and remains applicable at tile boundaries.
 
 With WPP, the decoder accepts the same one independent full-picture tile slice.
 It derives one escaped substream per picture-row/tile-column, de-escapes every
 range separately, restarts arithmetic decoding for each, and carries a tile's
 CABAC context from its local second CTU to its next row. The outer loop still
 publishes the reconstruction state once per picture row. Multiple or dependent
-tile slices, tile pictures with `cu_qp_delta`, and tile pictures requiring SAO
-remain named refusals.
+tile slices and tile pictures with `cu_qp_delta` remain named refusals.
 
 ## Per-CU QP delta (`cu_qp_delta`), landed
 

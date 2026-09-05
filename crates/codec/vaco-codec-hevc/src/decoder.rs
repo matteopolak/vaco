@@ -794,11 +794,6 @@ impl HevcDecoder {
                             "vaco-codec-hevc: WPP tile pictures with cu_qp_delta are not supported",
                         ));
                     }
-                    if parsed.sao_luma || parsed.sao_chroma {
-                        return Err(Error::Unsupported(
-                            "vaco-codec-hevc: WPP tile SAO filtering is not supported",
-                        ));
-                    }
                     walk.begin_slice_segment(0, total_ctbs, segment_qp);
                     decode_wpp_tile_substreams(
                         &mut self.budget,
@@ -897,11 +892,6 @@ impl HevcDecoder {
                     if pps.cu_qp_delta_enabled {
                         return Err(Error::Unsupported(
                             "vaco-codec-hevc: tile pictures with cu_qp_delta are not supported",
-                        ));
-                    }
-                    if parsed.sao_luma || parsed.sao_chroma {
-                        return Err(Error::Unsupported(
-                            "vaco-codec-hevc: tile SAO filtering is not supported",
                         ));
                     }
                     let segment_qp = 26 + pps.init_qp_minus26 + parsed.qp_delta;

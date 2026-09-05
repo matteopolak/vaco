@@ -50,6 +50,7 @@ use vaco_limits::Budget;
 
 use crate::cabac_ctx::ContextBank;
 use crate::ctu::Ctx;
+use crate::tile::TileLayout;
 
 /// `getMaxOffsetQVal`, Table 9-32: this crate's 8-bit-only scope (the crate
 /// doc) collapses `min(bitDepth, 10)` to the literal `8`.
@@ -565,6 +566,8 @@ fn offset_block(
     cu_grid: &crate::framebuf::CuGrid<'_>,
     component_scale_x: u32,
     component_scale_y: u32,
+    tile_layout: Option<&TileLayout>,
+    ctb_size: i32,
 ) {
     let max_value = (1i32 << bit_depth) - 1;
     let (Ok(x0u), Ok(width_u)) = (usize::try_from(x0), usize::try_from(width)) else {
@@ -644,6 +647,21 @@ fn offset_block(
                     }
                     let Ok(xu) = usize::try_from(x) else { continue };
                     let Some(&sv) = cur_row.get(xu) else { continue };
+                    if !tile_edge_available(
+                        tile_layout,
+                        ctb_size,
+                        (component_scale_x, component_scale_y),
+                        (x, y),
+                        (x.saturating_add(dx0), y.saturating_add(dy0)),
+                    ) || !tile_edge_available(
+                        tile_layout,
+                        ctb_size,
+                        (component_scale_x, component_scale_y),
+                        (x, y),
+                        (x.saturating_add(dx1), y.saturating_add(dy1)),
+                    ) {
+                        continue;
+                    }
                     let (Some(&av), Some(&bv)) = (
                         usize::try_from(x + dx0).ok().and_then(|i| row_a.get(i)),
                         usize::try_from(x + dx1).ok().and_then(|i| row_b.get(i)),
@@ -662,6 +680,36 @@ fn offset_block(
             }
         }
     }
+}
+
+/// Whether an edge-offset SAO neighbour remains available across a tile
+/// boundary. Band-offset SAO has no neighbours; edge-offset samples use the
+/// same PPS loop-filter gate as the deblock edge between their CTBs.
+fn tile_edge_available(
+    layout: Option<&TileLayout>,
+    ctb_size: i32,
+    component_scale: (u32, u32),
+    sample: (i32, i32),
+    neighbour: (i32, i32),
+) -> bool {
+    let Some(layout) = layout else {
+        return true;
+    };
+    let to_ctb = |component: i32, scale: u32| {
+        component
+            .checked_shl(scale)
+            .and_then(|luma| luma.checked_div(ctb_size))
+            .and_then(|ctb| u32::try_from(ctb).ok())
+    };
+    let (Some(x0), Some(y0), Some(x1), Some(y1)) = (
+        to_ctb(sample.0, component_scale.0),
+        to_ctb(sample.1, component_scale.1),
+        to_ctb(neighbour.0, component_scale.0),
+        to_ctb(neighbour.1, component_scale.1),
+    ) else {
+        return false;
+    };
+    layout.loop_filter_edge_available(x0, y0, x1, y1)
 }
 
 /// Map a component-plane coordinate back to luma coordinates before querying
@@ -692,6 +740,7 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_, '_, '_, '_>) -
     }
     let ctb_size = 1i32 << s.shared.log2_ctb_size;
     let ctbs_x = s.shared.ctbs_x;
+    let tile_layout = s.shared.tile_layout.as_ref();
     let snap_y = Snapshot::capture(budget, &s.pic.y)?;
     let snap_cb = Snapshot::capture(budget, &s.pic.cb)?;
     let snap_cr = Snapshot::capture(budget, &s.pic.cr)?;
@@ -720,6 +769,8 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_, '_, '_, '_>) -
             &s.cu_grid,
             0,
             0,
+            tile_layout,
+            ctb_size,
         );
 
         let (cx0, cy0, cw, ch) = (x0 >> 1, y0 >> 1, (width + 1) >> 1, (height + 1) >> 1);
@@ -735,6 +786,8 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_, '_, '_, '_>) -
             &s.cu_grid,
             1,
             1,
+            tile_layout,
+            ctb_size,
         );
         offset_block(
             &mut s.pic.cr,
@@ -748,6 +801,8 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_, '_, '_, '_>) -
             &s.cu_grid,
             1,
             1,
+            tile_layout,
+            ctb_size,
         );
     }
     // The three snapshots are pure working state for the loop just above —
@@ -772,6 +827,136 @@ mod tests {
     use super::*;
     use crate::framebuf::{CuGrid, CuGridShared, Plane};
     use vaco_limits::Limits;
+    use vaco_parse_hevc::pps::Tiles;
+
+    #[test]
+    fn edge_offset_obeys_tile_loop_filter_availability() {
+        let disabled = Tiles {
+            num_columns: 2,
+            num_rows: 1,
+            uniform_spacing: true,
+            column_widths: Vec::new(),
+            row_heights: Vec::new(),
+            loop_filter_across_tiles: false,
+        };
+        let enabled = Tiles {
+            loop_filter_across_tiles: true,
+            ..disabled.clone()
+        };
+        let disabled = TileLayout::from_pps(&disabled, 2, 1).expect("valid tile layout");
+        let enabled = TileLayout::from_pps(&enabled, 2, 1).expect("valid tile layout");
+
+        assert!(tile_edge_available(
+            Some(&disabled),
+            64,
+            (0, 0),
+            (15, 20),
+            (16, 20)
+        ));
+        assert!(!tile_edge_available(
+            Some(&disabled),
+            64,
+            (0, 0),
+            (63, 20),
+            (64, 20)
+        ));
+        assert!(tile_edge_available(
+            Some(&enabled),
+            64,
+            (0, 0),
+            (63, 20),
+            (64, 20)
+        ));
+        assert!(!tile_edge_available(
+            Some(&disabled),
+            64,
+            (1, 1),
+            (31, 10),
+            (32, 10)
+        ));
+    }
+
+    #[test]
+    fn edge_offset_does_not_read_across_disabled_tile_boundary() {
+        let mut budget = Budget::new(Limits::default());
+        let grid_shared = CuGridShared::new(128, 3, false, 64);
+        let grid = CuGrid::new(&mut budget, &grid_shared).expect("test CU grid");
+        let tiles = Tiles {
+            num_columns: 2,
+            num_rows: 1,
+            uniform_spacing: true,
+            column_widths: Vec::new(),
+            row_heights: Vec::new(),
+            loop_filter_across_tiles: false,
+        };
+        let disabled = TileLayout::from_pps(&tiles, 2, 1).expect("valid tile layout");
+        let enabled = TileLayout::from_pps(
+            &Tiles {
+                loop_filter_across_tiles: true,
+                ..tiles
+            },
+            2,
+            1,
+        )
+        .expect("valid tile layout");
+
+        let mut disabled_plane = Plane::new(&mut budget, 128, 3).expect("test plane");
+        for y in 0..3 {
+            for x in 0..128 {
+                disabled_plane.set(x, y, 50);
+            }
+        }
+        disabled_plane.set(63, 1, 100);
+        let snapshot = Snapshot::capture(&mut budget, &disabled_plane).expect("test snapshot");
+        offset_block(
+            &mut disabled_plane,
+            &snapshot,
+            SaoMode::Eo {
+                class: 0,
+                offsets: [0, 0, 0, 0, 1],
+            },
+            63,
+            1,
+            1,
+            1,
+            8,
+            &grid,
+            0,
+            0,
+            Some(&disabled),
+            64,
+        );
+        assert_eq!(disabled_plane.get(63, 1), 100);
+
+        let mut enabled_plane = Plane::new(&mut budget, 128, 3).expect("test plane");
+        for y in 0..3 {
+            for x in 0..128 {
+                enabled_plane.set(x, y, 50);
+            }
+        }
+        enabled_plane.set(63, 1, 100);
+        let enabled_snapshot =
+            Snapshot::capture(&mut budget, &enabled_plane).expect("test snapshot");
+        offset_block(
+            &mut enabled_plane,
+            &enabled_snapshot,
+            SaoMode::Eo {
+                class: 0,
+                offsets: [0, 0, 0, 0, 1],
+            },
+            63,
+            1,
+            1,
+            1,
+            8,
+            &grid,
+            0,
+            0,
+            Some(&enabled),
+            64,
+        );
+        assert_eq!(enabled_plane.get(63, 1), 101);
+    }
 
     #[test]
     fn sao_leaves_filter_bypass_samples_unchanged() {
@@ -800,6 +985,8 @@ mod tests {
             &grid,
             0,
             0,
+            None,
+            4,
         );
 
         for y in 0..4 {
