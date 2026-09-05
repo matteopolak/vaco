@@ -62,8 +62,11 @@ mod tests {
     #[test]
     fn frame_budget_retains_a_large_awkward_clock_duration() {
         let frames = 9_007_199_254_740_993_i64;
-        let duration = Duration::from_ticks(frames, Rational::new(1_001, 30_000))
-            .unwrap_or(Duration::ZERO);
-        assert_eq!(super::frame_budget(duration, Rational::new(30_000, 1_001)), frames as u64);
+        let duration =
+            Duration::from_ticks(frames, Rational::new(1_001, 30_000)).unwrap_or(Duration::ZERO);
+        assert_eq!(
+            super::frame_budget(duration, Rational::new(30_000, 1_001)),
+            frames as u64
+        );
     }
 }

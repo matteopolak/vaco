@@ -64,8 +64,8 @@ mod tests {
     #[test]
     fn sample_budget_retains_a_large_awkward_clock_duration() {
         let samples = 9_007_199_254_740_993_i64;
-        let duration = Duration::from_ticks(samples, Rational::new(1, 48_000))
-            .unwrap_or(Duration::ZERO);
+        let duration =
+            Duration::from_ticks(samples, Rational::new(1, 48_000)).unwrap_or(Duration::ZERO);
         assert_eq!(super::sample_budget(duration, 48_000), samples as u64);
     }
 }
