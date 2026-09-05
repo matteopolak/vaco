@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-color"
-description = "Colour and LUT-adjacent video filters (plan 16 4.2's vaco-filter-color row): colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor, colorlevels, hue, exposure, colormatrix, limitdiff, tonemap implemented (12/29); the remaining 17 filters are not registered."
+description = "Colour and LUT-adjacent video filters (plan 16 4.2's vaco-filter-color row): colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor, colorlevels, hue, exposure, colormatrix, limitdiff, tonemap, normalize implemented (13/29); the remaining 16 filters are not registered."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
