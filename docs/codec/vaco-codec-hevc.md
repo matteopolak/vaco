@@ -994,20 +994,12 @@ minimum-size top-left leaf: its context-0 `part_mode` bin is 0, measured as
 `prev_intra_luma_pred_flag` of 1. Tile 1 refuses both leaf steps because its
 grandchild did not split. No remaining PU, MPM, prediction, transform, or
 reconstruction syntax is consumed. For tile 0, the first bypass-coded
-`mpm_idx` prefix bin is measured as 1, and the second is measured as 0,
-selecting MPM index 1. With both top-left neighbours unavailable,
-§8.4.2's `[PLANAR, DC, VER]` list resolves that index to `INTRA_DC` (mode 1).
-The next 4x4 PU's context-0 `prev_intra_luma_pred_flag` is measured as 1; its
-first bypass-coded `mpm_idx` prefix bin is also measured as 1, and its second
-prefix bin is measured as 1, selecting MPM index 2. Its left neighbour is the
-first PU's `INTRA_DC` and its above neighbour is unavailable, so §8.4.2's
-`[PLANAR, DC, VER]` list resolves the index to `INTRA_VER` (mode 26). The next
-PU's context-0 `prev_intra_luma_pred_flag` is measured as 0, so its
-five bypass-coded `rem_intra_luma_pred_mode` bits are measured as 22. Its luma
-mode resolves to 24 from the same `[PLANAR, DC, VER]` MPM list: its left edge
-is unavailable and the PU above is the first `INTRA_DC` PU. The fourth PU and
-all later mode-dependent syntax remain unconsumed. Finally it sends the same
-access unit to `HevcDecoder` and
+all four `prev_intra_luma_pred_flag` bins are consumed before any MPM/rem-mode
+payload, as §7.3.8.5 requires. The subsequent PU payloads resolve through the
+tile-local §8.4.2 neighbour lists to `[PLANAR, INTRA_ANGULAR10, INTRA_VER,
+INTRA_VER]` (modes `[0, 10, 26, 26]`). Its one-per-CU chroma mode then resolves
+to `INTRA_PLANAR` (mode 0). Transform and reconstruction syntax remain
+unconsumed. Finally it sends the same access unit to `HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before the
 decoder consumes tile CABAC for reconstruction. This keeps the parser's

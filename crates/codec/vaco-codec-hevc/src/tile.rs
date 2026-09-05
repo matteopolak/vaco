@@ -37,17 +37,8 @@ pub struct TileCabacState<'a> {
     first_ctb_child_split: Option<bool>,
     first_ctb_grandchild_split: Option<bool>,
     first_ctb_leaf_nxn: Option<bool>,
-    first_ctb_leaf_prev_intra: Option<bool>,
-    first_ctb_leaf_mpm_prefix: Option<bool>,
-    first_ctb_leaf_mpm_suffix: Option<bool>,
-    first_ctb_leaf_luma_mode: Option<u8>,
-    first_ctb_leaf_second_prev_intra: Option<bool>,
-    first_ctb_leaf_second_mpm_prefix: Option<bool>,
-    first_ctb_leaf_second_mpm_suffix: Option<bool>,
-    first_ctb_leaf_second_luma_mode: Option<u8>,
-    first_ctb_leaf_third_prev_intra: Option<bool>,
-    first_ctb_leaf_third_rem_mode: Option<u8>,
-    first_ctb_leaf_third_luma_mode: Option<u8>,
+    first_ctb_leaf_luma_modes: Option<[u8; 4]>,
+    first_ctb_leaf_chroma_mode: Option<u8>,
 }
 
 impl TileCabacState<'_> {
@@ -240,26 +231,31 @@ impl TileCabacState<'_> {
         Ok(is_nxn)
     }
 
-    /// Decode the first 4x4 PU's `prev_intra_luma_pred_flag`.
+    /// Decode all luma-prediction syntax for the first minimum-size `PART_NxN` leaf.
     ///
-    /// A minimum-size intra leaf with `PART_NxN` has four PUs. This consumes
-    /// only the first flag, before any MPM or rem-mode syntax, as required by
-    /// §7.3.8.5. The flag uses the first initialized context entry, matching
-    /// the decoder's intra-CU path.
+    /// Section 7.3.8.5 orders the four context-coded
+    /// `prev_intra_luma_pred_flag` bins before every PU's MPM or rem-mode
+    /// payload. The following luma-mode loop uses the first tile's exact
+    /// tile-local neighbours: DC/DC, PU0/DC, DC/PU0, then PU2/PU1.
+    /// Reconstruction, chroma syntax, and transform syntax remain unconsumed.
     ///
     /// # Errors
     ///
-    /// Returns [`vaco_core::Error::Unsupported`] when the leaf was not
+    /// Returns [`vaco_core::Error::Unsupported`] unless the leaf was
     /// established as `PART_NxN`, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_prev_intra_luma_pred_flag(
+    /// inconsistent dimensions or a missing CABAC context.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "the fixed four-PU PART_NxN order bounds every array index"
+    )]
+    pub fn decode_first_ctb_leaf_luma_modes(
         &mut self,
         leaf_log2_size: u32,
         min_cb_log2_size: u32,
-    ) -> Result<bool> {
+    ) -> Result<[u8; 4]> {
         if self.first_ctb_leaf_nxn != Some(true) {
             return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile leaf has no NxN intra PU flags",
+                "vaco-codec-hevc: first tile leaf has no NxN intra PU modes",
             ));
         }
         if leaf_log2_size != min_cb_log2_size {
@@ -267,367 +263,83 @@ impl TileCabacState<'_> {
                 "vaco-codec-hevc: first tile leaf dimensions are invalid",
             ));
         }
-        let context = self
-            .contexts
-            .prev_intra_luma_pred
-            .first_mut()
-            .ok_or(Error::InvalidData(
-                "vaco-codec-hevc: prev_intra_luma_pred context is missing",
-            ))?;
-        let prev = self.cabac.decode_decision(context) != 0;
-        self.first_ctb_leaf_prev_intra = Some(prev);
-        Ok(prev)
-    }
 
-    /// Decode the first bypass-coded prefix bin of the first PU's `mpm_idx`.
-    ///
-    /// This bin follows a `prev_intra_luma_pred_flag` of 1 in §7.3.8.5. A zero
-    /// selects MPM index 0; a one requires one more bypass bin, which remains
-    /// unconsumed here.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] when the preceding flag was
-    /// not established as 1, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_mpm_idx_prefix(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<bool> {
-        if self.first_ctb_leaf_prev_intra != Some(true) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile leaf has no explicit mpm_idx",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let prefix = self.cabac.decode_bypass() != 0;
-        self.first_ctb_leaf_mpm_prefix = Some(prefix);
-        Ok(prefix)
-    }
-
-    /// Decode the second bypass-coded prefix bin of the first PU's `mpm_idx`.
-    ///
-    /// The first prefix bin must be 1 before this bin exists. A zero selects
-    /// MPM index 1 and a one selects index 2; the resolved mode itself remains
-    /// unconsumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] when the first prefix bin was
-    /// not established as 1, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_mpm_idx_suffix(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<bool> {
-        if self.first_ctb_leaf_mpm_prefix != Some(true) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile leaf has no mpm_idx suffix bin",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let suffix = self.cabac.decode_bypass() != 0;
-        self.first_ctb_leaf_mpm_suffix = Some(suffix);
-        Ok(suffix)
-    }
-
-    /// Resolve the first PU's measured MPM index to its luma mode.
-    ///
-    /// At the top-left PU of the first CTB in a tile, both neighbours are
-    /// unavailable, so §8.4.2 derives `[PLANAR, DC, VER]`. This bounded step
-    /// supports only the fixture's measured index 1 (`DC`); another index is
-    /// refused before any later intra syntax is consumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] when the measured MPM index
-    /// is not 1, and [`vaco_core::Error::InvalidData`] for inconsistent leaf
-    /// dimensions.
-    pub fn resolve_first_ctb_leaf_luma_mode(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<u8> {
-        if self.first_ctb_leaf_mpm_suffix != Some(false) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile leaf MPM index is not the measured mode",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let mode =
-            *crate::intra_mode::mpm_list(crate::intra_mode::DC_IDX, crate::intra_mode::DC_IDX)
-                .get(1)
+        let mut prev_flags = [false; 4];
+        for flag in &mut prev_flags {
+            let context = self
+                .contexts
+                .prev_intra_luma_pred
+                .first_mut()
                 .ok_or(Error::InvalidData(
-                    "vaco-codec-hevc: first tile MPM list is incomplete",
+                    "vaco-codec-hevc: prev_intra_luma_pred context is missing",
                 ))?;
-        self.first_ctb_leaf_luma_mode = Some(mode);
-        Ok(mode)
+            *flag = self.cabac.decode_decision(context) != 0;
+        }
+
+        let mut modes = [crate::intra_mode::DC_IDX; 4];
+        for index in 0..modes.len() {
+            let (left, above) = match index {
+                0 => (crate::intra_mode::DC_IDX, crate::intra_mode::DC_IDX),
+                1 => (modes[0], crate::intra_mode::DC_IDX),
+                2 => (crate::intra_mode::DC_IDX, modes[0]),
+                3 => (modes[2], modes[1]),
+                _ => unreachable!(),
+            };
+            let mpm = crate::intra_mode::mpm_list(left, above);
+            modes[index] = if prev_flags[index] {
+                let first = self.cabac.decode_bypass() != 0;
+                let mpm_index = if first {
+                    1 + usize::from(self.cabac.decode_bypass() != 0)
+                } else {
+                    0
+                };
+                *mpm.get(mpm_index).ok_or(Error::InvalidData(
+                    "vaco-codec-hevc: first tile MPM list is incomplete",
+                ))?
+            } else {
+                let mut rem_mode = 0_u8;
+                for _ in 0..5 {
+                    rem_mode = (rem_mode << 1) | u8::from(self.cabac.decode_bypass() != 0);
+                }
+                crate::intra_mode::resolve_rem_mode(rem_mode, mpm)
+            };
+        }
+        self.first_ctb_leaf_luma_modes = Some(modes);
+        Ok(modes)
     }
 
-    /// Decode the second 4x4 PU's `prev_intra_luma_pred_flag`.
+    /// Decode the first leaf's one-per-CU `intra_chroma_pred_mode`.
     ///
-    /// The first PU's MPM index and luma mode must be resolved before the
-    /// second PU is visited in §7.3.8.5 order. This consumes only that next
-    /// context-coded flag; its MPM/rem-mode syntax remains unconsumed.
+    /// Chroma follows all four luma PU modes and uses PU0's luma mode for the
+    /// derived-mode rule. Transform syntax remains unconsumed.
     ///
     /// # Errors
     ///
-    /// Returns [`vaco_core::Error::Unsupported`] when the first PU mode was
-    /// not the measured `INTRA_DC`, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_second_prev_intra_luma_pred_flag(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<bool> {
-        if self.first_ctb_leaf_luma_mode != Some(crate::intra_mode::DC_IDX) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile leaf first PU mode is not resolved",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let context = self
-            .contexts
-            .prev_intra_luma_pred
-            .first_mut()
-            .ok_or(Error::InvalidData(
-                "vaco-codec-hevc: prev_intra_luma_pred context is missing",
-            ))?;
-        let prev = self.cabac.decode_decision(context) != 0;
-        self.first_ctb_leaf_second_prev_intra = Some(prev);
-        Ok(prev)
-    }
-
-    /// Decode the second PU's first bypass-coded `mpm_idx` prefix bin.
-    ///
-    /// A `prev_intra_luma_pred_flag` of 1 selects this truncated-unary form
-    /// in §7.3.8.5. A zero prefix selects MPM index 0; a one requires one more
-    /// bypass bin, which remains unconsumed here.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] when the second PU has no
-    /// explicit MPM index, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_second_mpm_idx_prefix(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<bool> {
-        if self.first_ctb_leaf_second_prev_intra != Some(true) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile second PU has no explicit mpm_idx",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let prefix = self.cabac.decode_bypass() != 0;
-        self.first_ctb_leaf_second_mpm_prefix = Some(prefix);
-        Ok(prefix)
-    }
-
-    /// Decode the second PU's second bypass-coded `mpm_idx` prefix bin.
-    ///
-    /// The first prefix bin must be 1 before this bin exists in §7.3.8.5. A
-    /// zero selects MPM index 1 and a one selects index 2; mode resolution
-    /// remains unconsumed here.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] when the first prefix bin was
-    /// not established as 1, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_second_mpm_idx_suffix(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<bool> {
-        if self.first_ctb_leaf_second_mpm_prefix != Some(true) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile second PU has no mpm_idx suffix bin",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let suffix = self.cabac.decode_bypass() != 0;
-        self.first_ctb_leaf_second_mpm_suffix = Some(suffix);
-        Ok(suffix)
-    }
-
-    /// Resolve the second PU's measured MPM index to its luma mode.
-    ///
-    /// The first PU to the left is the established `INTRA_DC` mode and the
-    /// above neighbour is unavailable at the first CTB's top edge. Section
-    /// 8.4.2 therefore derives `[PLANAR, DC, VER]`; this bounded step accepts
-    /// only the fixture's measured MPM index 2 (`VER`). The following PU's
-    /// syntax remains unconsumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] unless the two preceding
-    /// luma modes establish the measured index, and
-    /// [`vaco_core::Error::InvalidData`] for inconsistent leaf dimensions.
-    pub fn resolve_first_ctb_leaf_second_luma_mode(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<u8> {
-        if self.first_ctb_leaf_second_mpm_suffix != Some(true)
-            || self.first_ctb_leaf_luma_mode != Some(crate::intra_mode::DC_IDX)
-        {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile second PU MPM index is not the measured mode",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let mode = *crate::intra_mode::mpm_list(
-            crate::intra_mode::DC_IDX,
-            crate::intra_mode::DC_IDX,
-        )
-        .get(2)
-        .ok_or(Error::InvalidData(
-            "vaco-codec-hevc: first tile MPM list is incomplete",
+    /// Returns [`vaco_core::Error::Unsupported`] until the luma modes are
+    /// decoded, and [`vaco_core::Error::InvalidData`] for a missing CABAC
+    /// context.
+    pub fn decode_first_ctb_leaf_chroma_mode(&mut self) -> Result<u8> {
+        let luma_modes = self.first_ctb_leaf_luma_modes.ok_or(Error::Unsupported(
+            "vaco-codec-hevc: first tile leaf luma modes are not resolved",
         ))?;
-        self.first_ctb_leaf_second_luma_mode = Some(mode);
-        Ok(mode)
-    }
-
-    /// Decode the third 4x4 PU's `prev_intra_luma_pred_flag`.
-    ///
-    /// This is the next PU in the first minimum-size `PART_NxN` leaf after
-    /// the second PU's established `INTRA_VER` mode. It consumes only the
-    /// next context-0 flag; the third PU's MPM/rem-mode syntax remains
-    /// unconsumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] unless the second PU mode
-    /// was resolved as `INTRA_VER`, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_third_prev_intra_luma_pred_flag(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<bool> {
-        if self.first_ctb_leaf_second_luma_mode != Some(crate::intra_mode::VER_IDX) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile second PU mode is not resolved",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
         let context = self
             .contexts
-            .prev_intra_luma_pred
+            .intra_chroma_pred_mode
             .first_mut()
             .ok_or(Error::InvalidData(
-                "vaco-codec-hevc: prev_intra_luma_pred context is missing",
+                "vaco-codec-hevc: intra_chroma_pred_mode context is missing",
             ))?;
-        let prev = self.cabac.decode_decision(context) != 0;
-        self.first_ctb_leaf_third_prev_intra = Some(prev);
-        Ok(prev)
-    }
-
-    /// Decode the third 4x4 PU's bypass-coded `rem_intra_luma_pred_mode`.
-    ///
-    /// A zero third-PU `prev_intra_luma_pred_flag` selects the five-bit form
-    /// in §7.3.8.5. This consumes those five bypass bins as one value; luma
-    /// mode resolution and the following PU remain unconsumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] unless the third PU selected
-    /// the rem-mode form, and [`vaco_core::Error::InvalidData`] for
-    /// inconsistent leaf dimensions.
-    pub fn decode_first_ctb_leaf_third_rem_intra_luma_pred_mode(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<u8> {
-        if self.first_ctb_leaf_third_prev_intra != Some(false) {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile third PU has no rem-mode syntax",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let mut rem_mode = 0_u8;
-        for _ in 0..5 {
-            rem_mode = (rem_mode << 1) | u8::from(self.cabac.decode_bypass() != 0);
-        }
-        self.first_ctb_leaf_third_rem_mode = Some(rem_mode);
-        Ok(rem_mode)
-    }
-
-    /// Resolve the third PU's measured rem-mode value to its luma mode.
-    ///
-    /// The third PU is at the first CTB's left edge, so its unavailable left
-    /// neighbour substitutes `INTRA_DC`; its above neighbour is the first
-    /// PU's established `INTRA_DC`. Section 8.4.2 therefore derives
-    /// `[PLANAR, DC, VER]` and maps this fixture's rem-mode value 22 to mode
-    /// 24. The following PU's syntax remains unconsumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`vaco_core::Error::Unsupported`] unless the measured rem-mode
-    /// and first-PU luma mode are established, and
-    /// [`vaco_core::Error::InvalidData`] for inconsistent leaf dimensions.
-    pub fn resolve_first_ctb_leaf_third_luma_mode(
-        &mut self,
-        leaf_log2_size: u32,
-        min_cb_log2_size: u32,
-    ) -> Result<u8> {
-        if self.first_ctb_leaf_third_rem_mode != Some(22)
-            || self.first_ctb_leaf_luma_mode != Some(crate::intra_mode::DC_IDX)
-        {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: first tile third PU rem-mode is not the measured value",
-            ));
-        }
-        if leaf_log2_size != min_cb_log2_size {
-            return Err(Error::InvalidData(
-                "vaco-codec-hevc: first tile leaf dimensions are invalid",
-            ));
-        }
-        let mode = crate::intra_mode::resolve_rem_mode(
-            22,
-            crate::intra_mode::mpm_list(crate::intra_mode::DC_IDX, crate::intra_mode::DC_IDX),
-        );
-        self.first_ctb_leaf_third_luma_mode = Some(mode);
+        let syntax = if self.cabac.decode_decision(context) == 0 {
+            crate::intra_mode::DM_CHROMA_IDX
+        } else {
+            let mut value = 0_u8;
+            for _ in 0..2 {
+                value = (value << 1) | u8::from(self.cabac.decode_bypass() != 0);
+            }
+            value
+        };
+        let mode = crate::intra_mode::chroma_mode(syntax, luma_modes[0]);
+        self.first_ctb_leaf_chroma_mode = Some(mode);
         Ok(mode)
     }
 }
@@ -897,17 +609,8 @@ impl TileLayout {
                 first_ctb_child_split: None,
                 first_ctb_grandchild_split: None,
                 first_ctb_leaf_nxn: None,
-                first_ctb_leaf_prev_intra: None,
-                first_ctb_leaf_mpm_prefix: None,
-                first_ctb_leaf_mpm_suffix: None,
-                first_ctb_leaf_luma_mode: None,
-                first_ctb_leaf_second_prev_intra: None,
-                first_ctb_leaf_second_mpm_prefix: None,
-                first_ctb_leaf_second_mpm_suffix: None,
-                first_ctb_leaf_second_luma_mode: None,
-                first_ctb_leaf_third_prev_intra: None,
-                first_ctb_leaf_third_rem_mode: None,
-                first_ctb_leaf_third_luma_mode: None,
+                first_ctb_leaf_luma_modes: None,
+                first_ctb_leaf_chroma_mode: None,
             });
         }
         Ok(states)

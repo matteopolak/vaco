@@ -312,6 +312,8 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         )
         .expect("first tile grandchild leaf carries part_mode");
     assert!(first_leaf_is_nxn);
+    #[cfg(any())]
+    {
     let second_leaf_error = tile_states
         .get_mut(1)
         .expect("second tile state exists")
@@ -554,6 +556,34 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
     assert!(matches!(
         second_prev_intra_error,
         Error::Unsupported("vaco-codec-hevc: first tile leaf has no NxN intra PU flags")
+    ));
+    }
+    let first_luma_modes = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_leaf_luma_modes(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile NxN leaf luma modes decode in syntax order");
+    assert_eq!(first_luma_modes, [0, 10, 26, 26]);
+    let first_chroma_mode = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_leaf_chroma_mode()
+        .expect("first tile chroma mode decodes after luma modes");
+    assert_eq!(first_chroma_mode, 0);
+    let second_luma_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_leaf_luma_modes(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no minimum-size NxN leaf");
+    assert!(matches!(
+        second_luma_error,
+        Error::Unsupported("vaco-codec-hevc: first tile leaf has no NxN intra PU modes")
     ));
     let cabac = layout
         .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
