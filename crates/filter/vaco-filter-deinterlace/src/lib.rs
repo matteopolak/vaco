@@ -54,4 +54,24 @@ pub mod w3fdif;
 pub mod weave;
 pub mod yadif;
 
+/// Benchmark-only entry points for measuring the shared motion-adaptive
+/// kernel without making its filter-adapter state part of the supported API.
+#[doc(hidden)]
+pub mod bench_support {
+    use vaco_core::Result;
+    use vaco_frame::{Frame, FramePool};
+
+    /// Run one frame through the production `yadif`/`bwdif`/`w3fdif`/`estdif`
+    /// kernel with explicit temporal neighbours.
+    pub fn deinterlace_frame(
+        pool: &FramePool,
+        prev: Option<&Frame>,
+        cur: &Frame,
+        next: Option<&Frame>,
+        parity_tff: bool,
+    ) -> Result<Frame> {
+        crate::mad::deinterlace_frame(pool, prev, cur, next, parity_tff)
+    }
+}
+
 pub use registry::DeinterlaceRegistry;

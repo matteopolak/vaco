@@ -20,6 +20,11 @@ smallvec.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name    = "mad"
+harness = false
 
 [lints]
 workspace = true

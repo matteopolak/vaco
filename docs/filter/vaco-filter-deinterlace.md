@@ -47,6 +47,25 @@ row bytes directly is both simpler and exact for any sample depth.
 deinterlace kernel — used by `yadif`, `bwdif`, `w3fdif`, `estdif` and
 `kerndeint`.
 
+### Kernel benchmark
+
+The shared motion-adaptive kernel has a `divan` benchmark:
+
+```text
+cargo bench -p vaco-filter-deinterlace --bench mad
+```
+
+The timed closure excludes input frame construction. It includes the common
+output allocation and runs the three-plane `Yuv420p` path with
+previous/current/next frames, so the measured work is the row and pixel
+kernel plus output writes. The kernel resolves its
+six neighbouring row views once per output row, rather than repeating checked
+`PlaneRef::row()` lookups for every pixel; this is the performance-sensitive
+path shared by all five motion-adaptive filters. The benchmark binary first
+checks candidate pixels against the former per-pixel baseline at all three
+sizes, then emits a ten-round alternating baseline/candidate timing at 640x480
+before `divan` reports its distributions.
+
 ## `vaco-filter-vdsp`: extended, not duplicated
 
 The row's dependency column calls for `vdsp`. `idet` and `fieldmatch` both

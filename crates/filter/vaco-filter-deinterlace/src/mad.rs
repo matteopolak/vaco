@@ -4,14 +4,14 @@
 //! The reference kernels are GPL and lack a sufficiently precise public
 //! description, so this is not a transcription. For each missing row it
 //! blends a temporal candidate—three readings of the kept field through
-//! [`kept_field_estimate`]—with a same-frame vertical-neighbor candidate,
+//! [`kept_field_estimate_rows`]—with a same-frame vertical-neighbor candidate,
 //! favoring temporal information when adjacent temporal readings agree.
 //!
 //! Reading `prev` and `next` at the missing row samples the discarded field
 //! at other times and can reproduce the artifact instead of estimating the
 //! kept field. On a zero-vertical-variation fixture, that earlier approach
 //! changed the comb score from 730112 at input to 746224 at output.
-//! [`kept_field_estimate`] instead asks the same kept-field interpolation
+//! [`kept_field_estimate_rows`] instead asks the same kept-field interpolation
 //! question of every frame before temporal averaging.
 //!
 //! When `prev`, `cur`, and `next` are the same static image, every estimate
@@ -27,7 +27,7 @@
 use vaco_core::{Error, Result};
 use vaco_filter_core::FilterContext;
 use vaco_filter_core::adapt::{FrameFilter, FrameOut};
-use vaco_frame::{Frame, FrameData, FramePool, PlaneRef};
+use vaco_frame::{Frame, FrameData, FramePool};
 
 use crate::video::{alloc_like, copy_row, dims, ensure_addressable, is_tff};
 
@@ -37,17 +37,14 @@ fn is_kept_row(y: usize, parity_tff: bool) -> bool {
     y.is_multiple_of(2) == parity_tff
 }
 
-fn sample(plane: PlaneRef<'_>, x: usize, y: usize) -> Option<u8> {
-    plane.row(y)?.get(x).copied()
-}
-
-/// A time-independent estimate of the *kept field's own* value at `(x, y)`
-/// of `plane`, from that one plane alone: the average of the two nearest
-/// same-frame rows (edge rows fall back to the single row that exists).
+/// A time-independent estimate of the *kept field's own* value at `x`, from
+/// one pair of neighbouring rows. The caller hoists row lookup out of the
+/// pixel loop; this avoids repeating checked stride arithmetic for every
+/// sample in a row.
 ///
-/// # Why this is the building block, not [`sample`] directly
+/// # Why this is the building block
 ///
-/// Every plane this crate hands to [`blend`] — `prev`, `cur` and `next`
+/// Every plane this crate hands to [`blend_rows`] — `prev`, `cur` and `next`
 /// alike — shares one field-order convention for the whole stream (see
 /// [`Lookahead`]'s own doc), so row `y` is genuinely sampled at *every one*
 /// of them, but always at the *other* field's time, never the kept field's.
@@ -60,18 +57,18 @@ fn sample(plane: PlaneRef<'_>, x: usize, y: usize) -> Option<u8> {
 /// from three different frames are directly comparable and can be averaged
 /// or motion-gated as three readings of the *same* underlying signal at
 /// three points in time.
-fn kept_field_estimate(plane: PlaneRef<'_>, x: usize, y: usize, rows: usize) -> Option<u16> {
-    // `y` itself is never a valid neighbour: at the top edge there is no
-    // row `y-1`, and at the bottom edge no row `y+1` — either must fall
-    // back to "use only the neighbour that exists", never to sampling `y`
-    // itself, which for a non-kept row would silently reintroduce the
-    // wrong-field-time value this function exists to avoid.
-    let above = y.checked_sub(1).and_then(|ay| sample(plane, x, ay));
-    let below = if y.saturating_add(1) < rows {
-        sample(plane, x, y + 1)
-    } else {
-        None
-    };
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    reason = "this helper is called for every output pixel in the hot path"
+)]
+fn kept_field_estimate_rows(
+    above_row: Option<&[u8]>,
+    below_row: Option<&[u8]>,
+    x: usize,
+) -> Option<u16> {
+    let above = above_row.and_then(|row| row.get(x).copied());
+    let below = below_row.and_then(|row| row.get(x).copied());
     match (above, below) {
         (Some(a), Some(b)) => Some((u16::from(a) + u16::from(b)).div_ceil(2)),
         (Some(a), None) => Some(u16::from(a)),
@@ -80,31 +77,44 @@ fn kept_field_estimate(plane: PlaneRef<'_>, x: usize, y: usize, rows: usize) -> 
     }
 }
 
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    clippy::indexing_slicing,
+    reason = "the caller validates row lengths and x is below cols; direct indexing avoids per-pixel bounds checks"
+)]
+fn kept_field_estimate_full(above_row: &[u8], below_row: &[u8], x: usize) -> u16 {
+    (u16::from(above_row[x]) + u16::from(below_row[x])).div_ceil(2)
+}
+
 /// The interpolated value for one non-kept sample at `(x, y)` of `cur`,
 /// given optional temporal neighbours `prev`/`next` and same-frame spatial
-/// neighbours at `y-1`/`y+1` — all read via [`kept_field_estimate`], so
+/// neighbours at `y-1`/`y+1` — all read via [`kept_field_estimate_rows`], so
 /// every candidate this blends targets the same instant (the kept field's
 /// own, at `cur`'s time) rather than mixing in a different field's time.
+#[inline(always)]
 #[allow(
+    clippy::inline_always,
     clippy::too_many_arguments,
     clippy::many_single_char_names,
     reason = "a per-pixel kernel genuinely takes this many operands, named for the pixel-math role they play"
 )]
-fn blend(
-    cur: PlaneRef<'_>,
-    prev: Option<PlaneRef<'_>>,
-    next: Option<PlaneRef<'_>>,
+fn blend_rows(
+    cur_above: Option<&[u8]>,
+    cur_below: Option<&[u8]>,
+    prev_above: Option<&[u8]>,
+    prev_below: Option<&[u8]>,
+    next_above: Option<&[u8]>,
+    next_below: Option<&[u8]>,
     x: usize,
-    y: usize,
-    rows: usize,
 ) -> u8 {
-    let spatial = kept_field_estimate(cur, x, y, rows);
-    let p = prev.and_then(|p| kept_field_estimate(p, x, y, rows));
-    let n = next.and_then(|p| kept_field_estimate(p, x, y, rows));
+    let spatial = kept_field_estimate_rows(cur_above, cur_below, x);
+    let p = kept_field_estimate_rows(prev_above, prev_below, x);
+    let n = kept_field_estimate_rows(next_above, next_below, x);
     // A one-sided reading (only `prev` or only `next` available, at the
     // first/last frame of a sequence) cannot be corroborated against
     // anything and is not itself time-neutral the way the average of two
-    // symmetric readings is (see `kept_field_estimate`'s doc) — blending
+    // symmetric readings is (see `kept_field_estimate_rows`'s doc) — blending
     // it in unconditionally would reintroduce a fixed time-offset bias at
     // exactly the frames with no partner to cancel it. Only a `Some`/`Some`
     // pair becomes a temporal candidate; a lone reading falls through to
@@ -119,7 +129,7 @@ fn blend(
     };
     let value = match (temporal, spatial) {
         // Both candidates already estimate the *same* instant (see
-        // `kept_field_estimate`'s doc), so low motion averages three
+        // `kept_field_estimate_rows`'s doc), so low motion averages three
         // readings of one signal (a noise reduction) and high motion
         // drops the temporal one (avoiding ghosting from a scene change)
         // rather than ever blending in a different field's time.
@@ -137,8 +147,38 @@ fn blend(
     u8::try_from(value.min(255)).unwrap_or(255)
 }
 
+/// Interior-row variant of [`blend_rows`]. All six row views and the source
+/// samples are known to exist, so the per-pixel loop can use direct indexing
+/// without carrying `Option` state or repeating bounds checks.
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    clippy::many_single_char_names,
+    reason = "this is the fully populated interior-row kernel"
+)]
+fn blend_full_rows(
+    cur_above: &[u8],
+    cur_below: &[u8],
+    prev_above: &[u8],
+    prev_below: &[u8],
+    next_above: &[u8],
+    next_below: &[u8],
+    x: usize,
+) -> u8 {
+    let spatial = kept_field_estimate_full(cur_above, cur_below, x);
+    let p = kept_field_estimate_full(prev_above, prev_below, x);
+    let n = kept_field_estimate_full(next_above, next_below, x);
+    let temporal = (p + n).div_ceil(2);
+    let value = if p.abs_diff(n) <= 4 {
+        (temporal + spatial).div_ceil(2)
+    } else {
+        spatial
+    };
+    u8::try_from(value.min(255)).unwrap_or(255)
+}
+
 /// Deinterlace one frame: rows matching `parity_tff` are copied from `cur`
-/// verbatim (genuine), the others are recomputed via [`blend`] using
+/// verbatim (genuine), the others are recomputed via [`blend_rows`] using
 /// `prev`/`next` as temporal references where available.
 ///
 /// # Errors
@@ -174,10 +214,53 @@ pub(crate) fn deinterlace_frame(
             let Some(dst_row) = dst_plane.row_mut(y) else {
                 continue;
             };
-            for x in 0..cols.min(dst_row.len()) {
-                let v = blend(cur_plane, prev_plane, next_plane, x, y, rows);
-                if let Some(b) = dst_row.get_mut(x) {
-                    *b = v;
+            // `row()` performs checked stride arithmetic and range slicing.
+            // Resolve each neighbour once per output row instead of once per
+            // pixel; the six row views are reused by the whole inner loop.
+            let above = y.checked_sub(1);
+            let below = y.checked_add(1).filter(|&by| by < rows);
+            let cur_above = above.and_then(|ay| cur_plane.row(ay));
+            let cur_below = below.and_then(|by| cur_plane.row(by));
+            let prev_above = prev_plane.and_then(|plane| above.and_then(|ay| plane.row(ay)));
+            let prev_below = prev_plane.and_then(|plane| below.and_then(|by| plane.row(by)));
+            let next_above = next_plane.and_then(|plane| above.and_then(|ay| plane.row(ay)));
+            let next_below = next_plane.and_then(|plane| below.and_then(|by| plane.row(by)));
+            let full_rows = match (
+                cur_above, cur_below, prev_above, prev_below, next_above, next_below,
+            ) {
+                (
+                    Some(cur_above),
+                    Some(cur_below),
+                    Some(prev_above),
+                    Some(prev_below),
+                    Some(next_above),
+                    Some(next_below),
+                ) if cur_above.len() >= cols
+                    && cur_below.len() >= cols
+                    && prev_above.len() >= cols
+                    && prev_below.len() >= cols
+                    && next_above.len() >= cols
+                    && next_below.len() >= cols =>
+                {
+                    Some((
+                        cur_above, cur_below, prev_above, prev_below, next_above, next_below,
+                    ))
+                }
+                _ => None,
+            };
+            if let Some((cur_above, cur_below, prev_above, prev_below, next_above, next_below)) =
+                full_rows
+            {
+                for (x, dst) in dst_row.iter_mut().take(cols).enumerate() {
+                    *dst = blend_full_rows(
+                        cur_above, cur_below, prev_above, prev_below, next_above, next_below, x,
+                    );
+                }
+            } else {
+                for (x, dst) in dst_row.iter_mut().take(cols).enumerate() {
+                    *dst = blend_rows(
+                        cur_above, cur_below, prev_above, prev_below, next_above, next_below, x,
+                    );
                 }
             }
         }
@@ -260,7 +343,229 @@ impl FrameFilter for Lookahead {
 mod tests {
     use super::*;
     use crate::video::test_support::{ramp_frame, row_value};
-    use vaco_frame::FramePool;
+    use vaco_frame::{FramePool, PlaneRef};
+
+    fn reference_sample(plane: PlaneRef<'_>, x: usize, y: usize) -> Option<u8> {
+        plane.row(y)?.get(x).copied()
+    }
+
+    fn reference_estimate(plane: PlaneRef<'_>, x: usize, y: usize, rows: usize) -> Option<u16> {
+        let above = y
+            .checked_sub(1)
+            .and_then(|ay| reference_sample(plane, x, ay));
+        let below = if y.saturating_add(1) < rows {
+            reference_sample(plane, x, y + 1)
+        } else {
+            None
+        };
+        match (above, below) {
+            (Some(a), Some(b)) => Some((u16::from(a) + u16::from(b)).div_ceil(2)),
+            (Some(a), None) => Some(u16::from(a)),
+            (None, Some(b)) => Some(u16::from(b)),
+            (None, None) => None,
+        }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::many_single_char_names,
+        reason = "test-only reference preserves the former per-pixel call shape"
+    )]
+    fn reference_blend(
+        cur: PlaneRef<'_>,
+        prev: Option<PlaneRef<'_>>,
+        next: Option<PlaneRef<'_>>,
+        x: usize,
+        y: usize,
+        rows: usize,
+    ) -> u8 {
+        let spatial = reference_estimate(cur, x, y, rows);
+        let p = prev.and_then(|plane| reference_estimate(plane, x, y, rows));
+        let n = next.and_then(|plane| reference_estimate(plane, x, y, rows));
+        let temporal = match (p, n) {
+            (Some(a), Some(b)) => Some((a + b).div_ceil(2)),
+            _ => None,
+        };
+        let motion = match (p, n) {
+            (Some(a), Some(b)) => a.abs_diff(b),
+            _ => 0,
+        };
+        let value = match (temporal, spatial) {
+            (Some(t), Some(s)) if motion <= 4 => (t + s).div_ceil(2),
+            (Some(_), Some(s)) => s,
+            (Some(t), None) => t,
+            (None, Some(s)) => s,
+            (None, None) => 128,
+        };
+        u8::try_from(value.min(255)).unwrap_or(255)
+    }
+
+    fn structured_frame(pool: &FramePool, seed: u8) -> Frame {
+        let mut frame = pool
+            .acquire_video(vaco_pixfmt::PixFmt::Gray8, 11, 9)
+            .unwrap();
+        let mut plane = frame.plane_mut(0).unwrap();
+        for y in 0..plane.rows() {
+            let row = plane.row_mut(y).unwrap();
+            for (x, sample) in row.iter_mut().enumerate() {
+                *sample = seed
+                    .wrapping_add((x as u8).wrapping_mul(19))
+                    .wrapping_add((y as u8).wrapping_mul(37));
+            }
+        }
+        frame
+    }
+
+    #[test]
+    fn row_hoisting_preserves_the_previous_per_pixel_kernel() {
+        let pool = FramePool::default();
+        let previous = structured_frame(&pool, 3);
+        let current = structured_frame(&pool, 71);
+        let following = structured_frame(&pool, 149);
+        let cur_plane = current.plane(0).unwrap();
+        let previous_plane = previous.plane(0).unwrap();
+        let following_plane = following.plane(0).unwrap();
+        let rows = cur_plane.rows();
+
+        for y in 0..rows {
+            let cur_above = y.checked_sub(1).and_then(|ay| cur_plane.row(ay));
+            let cur_below = y
+                .checked_add(1)
+                .filter(|&by| by < rows)
+                .and_then(|by| cur_plane.row(by));
+            let previous_above = y.checked_sub(1).and_then(|ay| previous_plane.row(ay));
+            let previous_below = y
+                .checked_add(1)
+                .filter(|&by| by < rows)
+                .and_then(|by| previous_plane.row(by));
+            let following_above = y.checked_sub(1).and_then(|ay| following_plane.row(ay));
+            let following_below = y
+                .checked_add(1)
+                .filter(|&by| by < rows)
+                .and_then(|by| following_plane.row(by));
+
+            for x in 0..11 {
+                let expected = reference_blend(
+                    cur_plane,
+                    Some(previous_plane),
+                    Some(following_plane),
+                    x,
+                    y,
+                    rows,
+                );
+                let actual = blend_rows(
+                    cur_above,
+                    cur_below,
+                    previous_above,
+                    previous_below,
+                    following_above,
+                    following_below,
+                    x,
+                );
+                assert_eq!(actual, expected, "x={x}, y={y}");
+                if let (
+                    Some(cur_above),
+                    Some(cur_below),
+                    Some(previous_above),
+                    Some(previous_below),
+                    Some(following_above),
+                    Some(following_below),
+                ) = (
+                    cur_above,
+                    cur_below,
+                    previous_above,
+                    previous_below,
+                    following_above,
+                    following_below,
+                ) {
+                    let actual_full = blend_full_rows(
+                        cur_above,
+                        cur_below,
+                        previous_above,
+                        previous_below,
+                        following_above,
+                        following_below,
+                        x,
+                    );
+                    assert_eq!(actual_full, expected, "full x={x}, y={y}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn row_kernel_fallback_preserves_one_sided_temporal_edges() {
+        let pool = FramePool::default();
+        let previous = structured_frame(&pool, 3);
+        let current = structured_frame(&pool, 71);
+        let following = structured_frame(&pool, 149);
+        let cur_plane = current.plane(0).unwrap();
+        let previous_plane = previous.plane(0).unwrap();
+        let following_plane = following.plane(0).unwrap();
+        let rows = cur_plane.rows();
+        let variants: &[(Option<PlaneRef<'_>>, Option<PlaneRef<'_>>)] = &[
+            (None, None),
+            (Some(previous_plane), None),
+            (None, Some(following_plane)),
+            (Some(previous_plane), Some(following_plane)),
+        ];
+
+        for &y in &[0, rows - 1] {
+            let cur_above = y.checked_sub(1).and_then(|ay| cur_plane.row(ay));
+            let cur_below = y
+                .checked_add(1)
+                .filter(|&by| by < rows)
+                .and_then(|by| cur_plane.row(by));
+            for &(prev, next) in variants {
+                let prev_above =
+                    prev.and_then(|plane| y.checked_sub(1).and_then(|ay| plane.row(ay)));
+                let prev_below = prev.and_then(|plane| {
+                    y.checked_add(1)
+                        .filter(|&by| by < rows)
+                        .and_then(|by| plane.row(by))
+                });
+                let next_above =
+                    next.and_then(|plane| y.checked_sub(1).and_then(|ay| plane.row(ay)));
+                let next_below = next.and_then(|plane| {
+                    y.checked_add(1)
+                        .filter(|&by| by < rows)
+                        .and_then(|by| plane.row(by))
+                });
+                for x in 0..11 {
+                    let expected = reference_blend(cur_plane, prev, next, x, y, rows);
+                    let actual = blend_rows(
+                        cur_above, cur_below, prev_above, prev_below, next_above, next_below, x,
+                    );
+                    assert_eq!(
+                        actual, expected,
+                        "x={x}, y={y}, prev={prev:?}, next={next:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn short_neighbour_rows_use_the_safe_fallback() {
+        let above = [17_u8, 23];
+        let below: [u8; 0] = [];
+        assert_eq!(
+            kept_field_estimate_rows(Some(&above), Some(&below), 0),
+            Some(17)
+        );
+        assert_eq!(
+            kept_field_estimate_rows(Some(&above), Some(&below), 1),
+            Some(23)
+        );
+        assert_eq!(
+            kept_field_estimate_rows(Some(&above), Some(&below), 2),
+            None
+        );
+        assert_eq!(
+            blend_rows(Some(&above), Some(&below), None, None, None, None, 1),
+            23
+        );
+    }
 
     #[test]
     fn a_static_sequence_reproduces_exactly() {
