@@ -1,20 +1,10 @@
 # Vaco — the single entry point for every developer command.
 #
-# MULTI-AGENT BUILDS (plan 19 §4). Cargo takes an exclusive lock per target
-# directory, so agents sharing one `target/` serialise on it. Every cargo recipe
-# below threads a private target dir through as a FLAG.
-#
-#   VACO_TARGET_DIR=/tmp/vaco-flac-k3f9 just check vaco-codec-flac
-#
-# Pass it as `--target-dir`, never as the CARGO_TARGET_DIR environment variable:
-# sccache hashes CARGO_* env vars into its cache keys, and the env-var form
-# measured 0% cache hits where the flag form measured 78-94%.
-#
-# Delete your directory when you finish, by its literal name. Never glob.
-
-VACO_TARGET_DIR := env_var_or_default("VACO_TARGET_DIR", "target")
-JOBS            := env_var_or_default("VACO_JOBS", "4")
-TD              := "--target-dir " + VACO_TARGET_DIR + " -j " + JOBS
+# Local machine policy in `~/.cargo/config.toml` supplies sccache, a single
+# shared target directory, and eight build jobs. Concurrent commands queue on
+# Cargo's target lock. Keep recipes free of per-project target and job overrides.
+TARGET_DIR := `cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'`
+TD         := ""
 
 default:
     @just --list
@@ -457,7 +447,7 @@ diff-fuzz family iterations="500" mutator="generic":
     cargo build --bin diff_probe --no-default-features --manifest-path fuzz/Cargo.toml
     ./fuzz/target/debug/diff_probe campaign \
         --seed-dir fuzz/seeds/diff/{{family}} \
-        --vaco-probe {{VACO_TARGET_DIR}}/release/vaco-probe \
+        --vaco-probe {{TARGET_DIR}}/release/vaco-probe \
         --iterations {{iterations}} \
         --mutator {{mutator}} \
         --out fuzz/seeds/diff/findings/{{family}}
@@ -479,7 +469,7 @@ diff-fuzz-baseline update="":
     for family in mp4 matroska mpegts wav ogg flv avi mpegps image2 aiff caf w64 nut; do
         ./fuzz/target/release/diff_probe campaign \
             --seed-dir fuzz/seeds/diff/$family \
-            --vaco-probe {{VACO_TARGET_DIR}}/release/vaco-probe \
+            --vaco-probe {{TARGET_DIR}}/release/vaco-probe \
             --iterations 500 --rng-seed 42 \
             --baseline fuzz/seeds/diff/baseline.txt {{update}} \
             --out fuzz/seeds/diff/findings/$family || fail=1

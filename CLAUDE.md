@@ -112,12 +112,15 @@ Every number must come from a measurement, in this session, on this machine.
   ratio.
 - **Interleave A/B, alternate order, ≥10 rounds**, and report CPU-seconds beside
   wall clock.
-- Build into a private target dir, never the shared `target/`.
+- Use the machine-level Cargo target at `~/.cargo/shared-target`; do not pass
+  `--target-dir`, export `CARGO_TARGET_DIR`, or set a per-agent job count.
 - Prefix verification runs with `CARGO_INCREMENTAL=0`. It buys nothing for a
   one-shot check and grows without bound: `target/` hit 46 GB, 31 GB of it
   incremental, and filled the disk twice in a day — at which point the harness
-  cannot write tool output and every agent stops. A private `--target-dir`
-  duplicates the whole dependency graph, so reuse one and delete it after.
+  cannot write tool output and every agent stops. The global Cargo config uses
+  eight jobs and queues concurrent commands on the shared target lock; its daily
+  cleanup skips live builds, expires artifacts after 21 days, and caps the target
+  at 40 GB.
 - Do not re-propose anything on the do-not-re-propose list without new evidence.
 
 **Optimise the success path; the error path may get arbitrarily slower.**
